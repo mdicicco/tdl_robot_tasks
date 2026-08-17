@@ -1,0 +1,102 @@
+# Task Definition Language — pick and place sketch
+# Frames are tool poses in the world. Lengths in meters, angles in degrees.
+
+version: 1
+name: table_pick_to_bin
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.18, 0.00, 0.42]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.30          # m/s for free-space and rest moves
+  angular: 90.0         # deg/s
+  approach_linear: 0.08 # m/s along approach / retract / target
+
+locations:
+  pickup:
+    description: Nominal grasp on the table, with a small XY search window
+    target:
+      xyz: [0.42, 0.16, 0.04]
+      rpy: [180.0, 0.0, 15.0]
+    search:
+      shape: box
+      extents: [0.10, 0.08, 0.03]
+      # Offset of the "found" pick inside the search region (target frame)
+      found_offset: [0.02, -0.01, 0.0]
+    approach:
+      azimuth: 0.0      # in the target frame: 0 deg = +X, 90 = +Y
+      elevation: -90.0  # -90 deg = along -Z (back off along tool Z)
+      distance: 0.12
+    retract:
+      azimuth: 20.0
+      elevation: -70.0
+      distance: 0.14
+    pattern:
+      grid:
+        counts: [3, 2]          # 3 along target X, 2 along target Y; X varies fastest
+        step: [0.06, 0.05, 0.0]
+    dwell: 0.35
+
+  dropoff:
+    description: Place into a bin, approaching from a shallow angle
+    target:
+      xyz: [0.28, -0.32, 0.10]
+      rpy: [180.0, 25.0, -40.0]
+    search:
+      shape: cylinder
+      radius: 0.06
+      height: 0.05
+    approach:
+      azimuth: 0.0
+      elevation: -55.0
+      distance: 0.16
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    dwell: 0.25
+
+  process:
+    description: Side stamp. Horizontal insert, dwell, hop up, then retract.
+    target:
+      xyz: [0.40, -0.14, 0.13]
+      rpy: [90.0, 0.0, 90.0]  # tool Z along world +X (insert into the press)
+    search:
+      shape: box
+      extents: [0.04, 0.03, 0.04]
+    approach:
+      azimuth: 0.0
+      elevation: -90.0        # back along tool -Z = world -X
+      distance: 0.16
+    post:
+      - axis: [0.0, 1.0, 0.0] # tool Y = world +Z; small lift after the stamp
+        distance: 0.03
+      - axis: [0.0, 0.0, -1.0]# then retract horizontally along world -X
+        distance: 0.14
+    dwell: 0.40
+
+# Named via poses. Listed between two locations, free-space goto passes through them.
+keyholes:
+  over_fixture:
+    description: Clear the fixture on the way from pick to the press
+    xyz: [0.50, -0.05, 0.34]
+    rpy: [180.0, 5.0, -20.0]
+    radius: 0.055
+
+sequence:
+  - rest
+  - repeat:
+      times: 7
+      steps:
+        - pickup
+        - keyhole: over_fixture
+        - process
+        - dropoff
+        - rest

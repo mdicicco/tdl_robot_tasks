@@ -71,6 +71,14 @@ def knots_from_task(task: Task) -> list[Knot]:
             kh = task.keyholes[step.ref]
             knots.append(Knot(kh.matrix(task.degrees), "keyhole", f"keyhole:{step.ref}"))
             continue
+        if step.kind == "pause":
+            if not knots:
+                raise ValueError("pause cannot be the first sequence item")
+            prev = knots[-1]
+            knots.append(
+                Knot(prev.pose.copy(), "pause", f"pause {step.hold:.2f}s", dwell=step.hold)
+            )
+            continue
         loc = task.locations[step.ref]
         pre, tgt, post = loc.cartesian_poses(task.degrees, visit=step.visit)
         slot = loc.pattern.slot_suffix(step.visit) if loc.pattern is not None else ""
@@ -101,6 +109,9 @@ def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
     out = [knots[0]]
     for k in knots[1:]:
         lin, ang = G.geodesic_metrics(out[-1].pose, k.pose)
+        if k.kind == "pause" or out[-1].kind == "pause":
+            out.append(k)
+            continue
         if lin < 1e-9 and ang < 1e-9:
             out[-1].dwell = max(out[-1].dwell, k.dwell)
             out[-1].label = k.label
@@ -200,6 +211,13 @@ def time_parameterize(
 
     i = 0
     while i < len(knots) - 1:
+        if knots[i + 1].kind == "pause":
+            t0 = t
+            sample_hold(knots[i].pose, "pause", knots[i + 1].label, knots[i + 1].dwell)
+            if t > t0:
+                segments.append(Segment(t0, t, "pause", knots[i + 1].label))
+            i += 1
+            continue
         if knots[i + 1].linear:
             sample_linear(knots[i], knots[i + 1])
             i += 1

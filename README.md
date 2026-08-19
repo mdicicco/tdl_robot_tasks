@@ -53,6 +53,7 @@ Sequence steps:
 - `{keyhole: <name>}` — via pose on the free-space goto to the next destination
 - `{move: <free_space name>}` — extra via points from the current pose
 - `{approach: <location>}` / `{target: <location>}` / `{retract: <location>}`
+- `{pause: <seconds>}` — hold the previous pose (no extra frame)
 - `{repeat: {times: N, steps: [...]}}`
 
 Geometry uses 4×4 homogeneous transforms (`scipy.spatial.transform` for orientation). Free-space / transit motion (including into the first approach pose) follows a cubic spline through waypoints; every Cartesian stroke at a location (into the target and each post-target move) stays straight-line. Orientation is SLERP, time-scaled by the active velocity limits.

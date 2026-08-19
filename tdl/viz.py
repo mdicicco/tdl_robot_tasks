@@ -17,6 +17,7 @@ KIND_COLORS = {
     "target": "#66BB6A",
     "post": "#AB47BC",
     "retract": "#AB47BC",
+    "pause": "#80CBC4",
     "idle": "#BDBDBD",
 }
 
@@ -196,7 +197,7 @@ def add_path(plotter: pv.Plotter, traj: Trajectory) -> None:
     for i, seg in enumerate(traj.segments):
         mask = (traj.t >= seg.t0 - 1e-9) & (traj.t <= seg.t1 + 1e-9)
         pts = traj.poses[mask, :3, 3]
-        if len(pts) < 2:
+        if len(pts) < 2 or seg.kind == "pause":
             continue
         line = pv.lines_from_points(pts)
         plotter.add_mesh(
@@ -223,6 +224,7 @@ def add_static_scene(plotter: pv.Plotter, task: Task, traj: Trajectory) -> None:
             ("approach", KIND_COLORS["approach"]),
             ("target", KIND_COLORS["target"]),
             ("retract", KIND_COLORS["retract"]),
+            ("pause", KIND_COLORS["pause"]),
             ("rest", KIND_COLORS["rest"]),
         ],
         bcolor="#1B1E24",

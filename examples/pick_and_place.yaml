@@ -98,5 +98,6 @@ sequence:
         - pickup
         - keyhole: over_fixture
         - process
+        - pause: 2.0
         - dropoff
         - rest

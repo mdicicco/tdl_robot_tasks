@@ -23,6 +23,20 @@ def parse_item(raw: Any) -> Step | RepeatBlock | str:
         return RepeatBlock.model_validate(block)
     if raw.get("type") == "rest" or "rest" in raw and len(raw) == 1:
         return Step(kind="rest")
+    if "pause" in raw:
+        val = raw["pause"]
+        if isinstance(val, (int, float)):
+            hold = float(val)
+        elif isinstance(val, dict):
+            raw_hold = val.get("seconds", val.get("duration", val.get("hold")))
+            if raw_hold is None:
+                raise ValueError("pause mapping must include seconds")
+            hold = float(raw_hold)
+        else:
+            raise ValueError("pause must be a number of seconds")
+        if hold < 0:
+            raise ValueError("pause duration must be >= 0")
+        return Step(kind="pause", hold=hold)
     for kind in _KINDS:
         if kind in raw:
             ref = raw[kind]
@@ -79,6 +93,8 @@ def _resolve_name(name: str, task: Task, visits: dict[str, int]) -> list[Step]:
 
 def _validate_step(step: Step, task: Task) -> None:
     if step.kind == "rest":
+        return
+    if step.kind == "pause":
         return
     if step.kind == "move":
         if step.ref not in task.free_space:

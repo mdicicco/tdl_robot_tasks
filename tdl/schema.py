@@ -279,10 +279,11 @@ class RepeatBlock(BaseModel):
 
 
 class Step(BaseModel):
-    kind: Literal["rest", "move", "approach", "target", "retract", "keyhole", "pre", "post"]
+    kind: Literal["rest", "move", "approach", "target", "retract", "keyhole", "pre", "post", "pause"]
     ref: str | None = None
     index: int = 0
     visit: int = 0
+    hold: float = 0.0
 
 
 class Task(BaseModel):

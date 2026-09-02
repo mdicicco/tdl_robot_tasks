@@ -1,5 +1,9 @@
 # Task Definition Language — pick and place sketch
 # Frames are tool poses in the world. Lengths in meters, angles in degrees.
+#
+# Stations on a circle (radius 0.35 m) around the origin, like a clock face:
+#   12  pickup    3  process    6  punch    9  dropoff
+# Rest pose is at the center.
 
 version: 1
 name: table_pick_to_bin
@@ -12,7 +16,7 @@ robot:
   rest:
     joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
     tool:
-      xyz: [0.18, 0.00, 0.42]
+      xyz: [0.00, 0.00, 0.42]
       rpy: [180.0, 0.0, 0.0]
 
 limits:
@@ -22,10 +26,10 @@ limits:
 
 locations:
   pickup:
-    description: Nominal grasp on the table, with a small XY search window
+    description: Pick tray at 12 o'clock (top of the work circle)
     target:
-      xyz: [0.42, 0.16, 0.04]
-      rpy: [180.0, 0.0, 15.0]
+      xyz: [0.00, 0.35, 0.04]
+      rpy: [180.0, 0.0, 0.0]
     search:
       shape: box
       extents: [0.10, 0.08, 0.03]
@@ -46,48 +50,66 @@ locations:
     dwell: 0.35
 
   dropoff:
-    description: Place into a bin, approaching from a shallow angle
+    description: Place into a bin at 9 o'clock (vertical down)
     target:
-      xyz: [0.28, -0.32, 0.10]
-      rpy: [180.0, 25.0, -40.0]
+      xyz: [-0.35, 0.00, 0.04]
+      rpy: [180.0, 0.0, 0.0]
     search:
       shape: cylinder
       radius: 0.06
       height: 0.05
     approach:
       azimuth: 0.0
-      elevation: -55.0
+      elevation: -90.0        # straight down along tool -Z
       distance: 0.16
     retract:
-      axis: [0.0, 0.0, -1.0]
+      axis: [0.0, 0.0, -1.0] # straight up along world +Z
       distance: 0.12
     dwell: 0.25
 
   process:
-    description: Side stamp. Horizontal insert, dwell, hop up, then retract.
+    description: Machine tending at 3 o'clock (insert away from center)
     target:
-      xyz: [0.40, -0.14, 0.13]
-      rpy: [90.0, 0.0, 90.0]  # tool Z along world +X (insert into the press)
+      xyz: [0.35, 0.00, 0.13]
+      rpy: [90.0, 0.0, 90.0]   # tool Z toward +X (away from origin)
     search:
       shape: box
       extents: [0.04, 0.03, 0.04]
     approach:
       azimuth: 0.0
-      elevation: -90.0        # back along tool -Z = world -X
+      elevation: -90.0        # back along tool -Z = world -X (from center side)
       distance: 0.16
     post:
       - axis: [0.0, 1.0, 0.0] # tool Y = world +Z; small lift after the stamp
         distance: 0.03
-      - axis: [0.0, 0.0, -1.0]# then retract horizontally along world -X
+      - axis: [0.0, 0.0, -1.0]# then retract along world -X (back toward center)
         distance: 0.14
     dwell: 0.40
+
+force_pushes:
+  punch:
+    description: Force punch at 6 o'clock (bottom of the work circle)
+    target:
+      xyz: [0.00, -0.35, 0.13]
+      rpy: [180.0, 0.0, 0.0]
+    approach:
+      azimuth: 0.0
+      elevation: -55.0
+      distance: 0.12
+    push:
+      axis: [0.0, 0.0, 1.0]   # along tool +Z into the pocket
+      max_travel: 0.05
+      force_limit: 30.0
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
 
 # Named via poses. Listed between two locations, free-space goto passes through them.
 keyholes:
   over_fixture:
-    description: Clear the fixture on the way from pick to the press
-    xyz: [0.50, -0.05, 0.34]
-    rpy: [180.0, 5.0, -20.0]
+    description: Arc between pickup (12) and process (3)
+    xyz: [0.22, 0.22, 0.36]
+    rpy: [180.0, 0.0, 45.0]
     radius: 0.055
 
 sequence:
@@ -99,5 +121,6 @@ sequence:
         - keyhole: over_fixture
         - process
         - pause: 2.0
+        - punch
         - dropoff
         - rest

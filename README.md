@@ -17,6 +17,7 @@ pip install -e .
 
 ```bash
 tdl-viewer examples/pick_and_place.yaml
+tdl-viewer examples/gated_dual_pick_place.yaml
 ```
 
 JSON files with the same schema also work.
@@ -30,6 +31,10 @@ Top-level document (`version: 1`):
 | `robot.rest.joints` | Rest pose in joint space (stored for later execution) |
 | `robot.rest.tool` | Cartesian tool frame used to visualize rest |
 | `locations` | Named pick/place sites |
+| `force_pushes` | Compliant push operations (approach, push until force or max travel, retract) |
+| `sensors` | Spherical presence regions tied to a gate; active while that gate is held |
+| `gates` | Wait poses; hold until every sensor reads true (mutual rendezvous) |
+| `systems` | Parallel lines, each with its own locations, limits, and sequence |
 | `keyholes` | Named via poses; free-space goto between locations passes through them |
 | `free_space` | Named via-point paths (optional; keyholes usually replace these) |
 | `sequence` | Ordered steps, including `repeat` blocks |
@@ -46,10 +51,25 @@ Each **location** has:
 
 A **keyhole** is a pose the tool must pass through during free-space motion (a doorway, fixture clearance, etc.). Put one or more `{keyhole: <name>}` steps between two locations; the cubic spline from the previous retract (or rest) to the next approach interpolates through each keyhole. `radius` is the visualized aperture; frame **Z** is the pass-through axis.
 
+A **force push** moves to a start pose (with optional approach), then pushes along a prescribed direction until a `force_limit` is reached or `max_travel` is exceeded, then retracts. Fields:
+
+- **target** — pose where the push begins
+- **approach** — optional pre-stroke (same spec as locations)
+- **push** — `axis` or `azimuth` / `elevation`, plus `max_travel` and `force_limit` (Newtons)
+- **retract** — stroke leaving the contact point
+
+The viewer currently travels the full `max_travel` distance (no force feedback yet). A real controller would stop early when resistance exceeds `force_limit`.
+
+A **sensor** is a sphere (`xyz` + `radius`) tied to a `gate`. It reads **true** while that gate is held. A **gate** moves to a wait pose and holds until every sensor reads true (mutual rendezvous). Use `{gate: <name>}` in a sequence.
+
+**systems** run in parallel in the viewer. Each has its own `locations`, optional `limits`, and `sequence`. See `examples/gated_dual_pick_place.yaml` for a two-line handshake demo.
+
 Sequence steps:
 
 - `rest`
 - `<location name>` — shorthand for every `pre` stroke, the target, then every `post` stroke
+- `<force_push name>` — approach (if any), push start, compliant push to max travel, retract
+- `{gate: <name>}` — move to the gate pose and wait for mutual rendezvous (all sensors true)
 - `{keyhole: <name>}` — via pose on the free-space goto to the next destination
 - `{move: <free_space name>}` — extra via points from the current pose
 - `{approach: <location>}` / `{target: <location>}` / `{retract: <location>}`

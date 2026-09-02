@@ -1,0 +1,124 @@
+# Gated dual pick-and-place demo
+# Two parallel lines side by side. Each waits at a midpoint gate until the
+# other line's tool is present at its own wait pose (mutual handshake).
+
+version: 1
+name: gated_dual_pick_place
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.42]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.25
+  angular: 90.0
+  approach_linear: 0.08
+
+# Presence sensors at each line's wait pose. Active while that gate is held.
+sensors:
+  presence_at_a:
+    description: Sees line A at its wait pose
+    xyz: [-0.35, 0.00, 0.30]
+    radius: 0.09
+    gate: wait_a
+  presence_at_b:
+    description: Sees line B at its wait pose
+    xyz: [0.35, 0.00, 0.30]
+    radius: 0.09
+    gate: wait_b
+
+# Gate poses halfway between pickup and dropoff. Each gate lists the partner's
+# sensor in `until`; both lines wait until ALL sensors read true (rendezvous).
+gates:
+  wait_a:
+    description: Line A handshake point
+    pose:
+      xyz: [-0.35, 0.00, 0.30]
+      rpy: [180.0, 0.0, 0.0]
+    until: presence_at_b
+  wait_b:
+    description: Line B handshake point
+    pose:
+      xyz: [0.35, 0.00, 0.30]
+      rpy: [180.0, 0.0, 0.0]
+    until: presence_at_a
+
+systems:
+  line_a:
+    description: Faster line (left) — shorter strokes
+    limits:
+      linear: 0.38
+      angular: 90.0
+      approach_linear: 0.10
+    locations:
+      pickup:
+        target:
+          xyz: [-0.35, 0.28, 0.04]
+          rpy: [180.0, 0.0, 0.0]
+        approach:
+          elevation: -90.0
+          distance: 0.10
+        retract:
+          axis: [0.0, 0.0, -1.0]
+          distance: 0.10
+        dwell: 0.20
+      dropoff:
+        target:
+          xyz: [-0.35, -0.28, 0.04]
+          rpy: [180.0, 0.0, 0.0]
+        approach:
+          elevation: -90.0
+          distance: 0.10
+        retract:
+          axis: [0.0, 0.0, -1.0]
+          distance: 0.10
+        dwell: 0.20
+    sequence:
+      - rest
+      - pickup
+      - gate: wait_a
+      - dropoff
+      - rest
+
+  line_b:
+    description: Slower line (right) — longer approach / retract
+    limits:
+      linear: 0.18
+      angular: 90.0
+      approach_linear: 0.06
+    locations:
+      pickup:
+        target:
+          xyz: [0.35, 0.32, 0.04]
+          rpy: [180.0, 0.0, 0.0]
+        approach:
+          elevation: -90.0
+          distance: 0.18
+        retract:
+          axis: [0.0, 0.0, -1.0]
+          distance: 0.18
+        dwell: 0.30
+      dropoff:
+        target:
+          xyz: [0.35, -0.32, 0.04]
+          rpy: [180.0, 0.0, 0.0]
+        approach:
+          elevation: -90.0
+          distance: 0.18
+        retract:
+          axis: [0.0, 0.0, -1.0]
+          distance: 0.18
+        dwell: 0.30
+    sequence:
+      - rest
+      - pickup
+      - gate: wait_b
+      - dropoff
+      - rest

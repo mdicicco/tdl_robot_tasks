@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from tdl.context import SystemContext
 from tdl.schema import RepeatBlock, Step, Task
 
-_KINDS = ("move", "approach", "target", "retract", "keyhole", "location", "pre", "post")
+_KINDS = ("move", "approach", "target", "retract", "keyhole", "location", "pre", "post", "gate")
 
 
 def parse_item(raw: Any) -> Step | RepeatBlock | str:
@@ -37,6 +38,11 @@ def parse_item(raw: Any) -> Step | RepeatBlock | str:
         if hold < 0:
             raise ValueError("pause duration must be >= 0")
         return Step(kind="pause", hold=hold)
+    if "gate" in raw:
+        ref = raw["gate"]
+        if not isinstance(ref, str):
+            raise ValueError("gate value must be a name string")
+        return Step(kind="gate", ref=ref)
     for kind in _KINDS:
         if kind in raw:
             ref = raw[kind]
@@ -48,31 +54,32 @@ def parse_item(raw: Any) -> Step | RepeatBlock | str:
     raise ValueError(f"Unrecognized sequence item: {raw}")
 
 
-def expand_sequence(task: Task) -> list[Step]:
+def expand_sequence(task: Task, ctx: SystemContext | None = None) -> list[Step]:
+    ctx = ctx or SystemContext.from_task(task)
     visits: dict[str, int] = {}
-    return _expand_list(task.sequence, task, visits)
+    return _expand_list(ctx.sequence, task, ctx, visits)
 
 
-def _expand_list(items: list[Any], task: Task, visits: dict[str, int]) -> list[Step]:
+def _expand_list(items: list[Any], task: Task, ctx: SystemContext, visits: dict[str, int]) -> list[Step]:
     out: list[Step] = []
     for raw in items:
         item = parse_item(raw)
         if isinstance(item, RepeatBlock):
             for _ in range(item.times):
-                out.extend(_expand_list(item.steps, task, visits))
+                out.extend(_expand_list(item.steps, task, ctx, visits))
         elif isinstance(item, str):
-            out.extend(_resolve_name(item, task, visits))
+            out.extend(_resolve_name(item, task, ctx, visits))
         else:
-            _validate_step(item, task)
+            _validate_step(item, task, ctx)
             out.append(item)
     return out
 
 
-def _resolve_name(name: str, task: Task, visits: dict[str, int]) -> list[Step]:
+def _resolve_name(name: str, task: Task, ctx: SystemContext, visits: dict[str, int]) -> list[Step]:
     if name == "rest":
         return [Step(kind="rest")]
-    if name in task.locations:
-        loc = task.locations[name]
+    if name in ctx.locations:
+        loc = ctx.locations[name]
         visit = visits.get(name, 0)
         visits[name] = visit + 1
         steps: list[Step] = []
@@ -86,23 +93,43 @@ def _resolve_name(name: str, task: Task, visits: dict[str, int]) -> list[Step]:
             kind = "retract" if i == n_post - 1 else "post"
             steps.append(Step(kind=kind, ref=name, index=i, visit=visit))
         return steps
-    if name in task.keyholes:
+    if name in ctx.force_pushes:
+        fp = ctx.force_pushes[name]
+        steps: list[Step] = []
+        if fp.approach is not None:
+            steps.append(Step(kind="fp_approach", ref=name))
+        steps.append(Step(kind="fp_start", ref=name))
+        steps.append(Step(kind="fp_push", ref=name))
+        steps.append(Step(kind="fp_retract", ref=name))
+        return steps
+    if name in ctx.keyholes:
         return [Step(kind="keyhole", ref=name)]
-    raise KeyError(f"Unknown sequence name {name!r} (not a location or keyhole)")
+    raise KeyError(
+        f"Unknown sequence name {name!r} (not a location, force push, or keyhole)"
+    )
 
 
-def _validate_step(step: Step, task: Task) -> None:
-    if step.kind == "rest":
+def _validate_step(step: Step, task: Task, ctx: SystemContext) -> None:
+    if step.kind in {"rest", "pause"}:
         return
-    if step.kind == "pause":
+    if step.kind == "gate":
+        if step.ref not in ctx.gates:
+            raise KeyError(f"Unknown gate {step.ref!r}")
+        gate = ctx.gates[step.ref]
+        if task.sensors and gate.until not in task.sensors:
+            raise KeyError(f"Unknown sensor {gate.until!r} for gate {step.ref!r}")
+        return
+    if step.kind.startswith("fp_"):
+        if step.ref not in ctx.force_pushes:
+            raise KeyError(f"Unknown force push {step.ref!r}")
         return
     if step.kind == "move":
         if step.ref not in task.free_space:
             raise KeyError(f"Unknown free-space path {step.ref!r}")
         return
     if step.kind == "keyhole":
-        if step.ref not in task.keyholes:
+        if step.ref not in ctx.keyholes:
             raise KeyError(f"Unknown keyhole {step.ref!r}")
         return
-    if step.ref not in task.locations:
+    if step.ref not in ctx.locations:
         raise KeyError(f"Unknown location {step.ref!r}")

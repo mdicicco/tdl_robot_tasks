@@ -32,9 +32,9 @@ from PySide6.QtWidgets import (
 from pyvistaqt import QtInteractor
 
 from tdl.io import load_task
+from tdl.multi import MultiTrajectory, build_multi_trajectory
 from tdl.schema import Limits, Task
-from tdl.trajectory import Trajectory, build_trajectory
-from tdl.viz import KIND_COLORS, TcpActor, add_static_scene
+from tdl.viz import KIND_COLORS, SYSTEM_TCP_COLORS, TcpActor, add_static_scene
 
 
 def _example_path() -> Path:
@@ -48,7 +48,7 @@ class Viewer(QMainWindow):
         self.setWindowTitle("Task Definition Language")
         self.resize(1400, 880)
         self.task: Task | None = None
-        self.traj: Trajectory | None = None
+        self.multi_traj: MultiTrajectory | None = None
         self._path_names: list[str] = []
         self._playing = False
         self._t = 0.0
@@ -74,7 +74,7 @@ class Viewer(QMainWindow):
         split.setStretchFactor(0, 4)
         split.setStretchFactor(1, 1)
 
-        self.tcp: TcpActor | None = None
+        self.tcps: dict[str, TcpActor] = {}
         self.timer = QTimer(self)
         self.timer.setInterval(16)
         self.timer.timeout.connect(self._tick)
@@ -209,10 +209,14 @@ class Viewer(QMainWindow):
 
     def _rebuild(self, reset_camera: bool) -> None:
         assert self.task is not None
-        self.traj = build_trajectory(self.task, self.current_limits())
+        self.multi_traj = build_multi_trajectory(self.task, self.current_limits())
         self.plotter.clear()
-        add_static_scene(self.plotter, self.task, self.traj)
-        self.tcp = TcpActor(self.plotter)
+        add_static_scene(self.plotter, self.task, self.multi_traj)
+        self.tcps = {}
+        for name in self.multi_traj.systems:
+            label = name or "main"
+            color = SYSTEM_TCP_COLORS.get(name, "#FFECB3")
+            self.tcps[name] = TcpActor(self.plotter, name=label, ball_color=color)
         self._fill_sequence()
         if reset_camera and self.follow.isChecked():
             self.plotter.view_isometric()
@@ -224,9 +228,9 @@ class Viewer(QMainWindow):
 
     def _fill_sequence(self) -> None:
         self.seq_list.clear()
-        if self.traj is None:
+        if self.multi_traj is None:
             return
-        for seg in self.traj.segments:
+        for seg in self.multi_traj.segments:
             item = QListWidgetItem(f"{seg.t0:5.2f}–{seg.t1:5.2f}s   {seg.label}")
             item.setData(Qt.ItemDataRole.UserRole, seg.t0)
             color = KIND_COLORS.get(seg.kind, "#FFFFFF")
@@ -237,21 +241,21 @@ class Viewer(QMainWindow):
 
     def _jump_to_item(self, item: QListWidgetItem) -> None:
         t0 = float(item.data(Qt.ItemDataRole.UserRole))
-        if self.traj is None:
+        if self.multi_traj is None:
             return
         self._playing = False
         self.play_btn.setText("Play")
         self.timer.stop()
-        frac = t0 / max(self.traj.duration, 1e-6)
+        frac = t0 / max(self.multi_traj.duration, 1e-6)
         self.time_slider.setValue(int(frac * self.time_slider.maximum()))
 
     def toggle_play(self) -> None:
-        if self.traj is None:
+        if self.multi_traj is None:
             return
         self._playing = not self._playing
         self.play_btn.setText("Pause" if self._playing else "Play")
         if self._playing:
-            if self._t >= self.traj.duration - 1e-9:
+            if self._t >= self.multi_traj.duration - 1e-9:
                 self._t = 0.0
                 self._sync_slider()
                 self._apply_time(self._t)
@@ -262,11 +266,11 @@ class Viewer(QMainWindow):
             self.timer.stop()
 
     def _tick(self) -> None:
-        if self.traj is None:
+        if self.multi_traj is None:
             return
         t = self._play_t0 + self._elapsed.elapsed() / 1000.0
-        if t >= self.traj.duration:
-            t = self.traj.duration
+        if t >= self.multi_traj.duration:
+            t = self.multi_traj.duration
             self._playing = False
             self.play_btn.setText("Play")
             self.timer.stop()
@@ -275,29 +279,36 @@ class Viewer(QMainWindow):
         self._apply_time(t)
 
     def _sync_slider(self) -> None:
-        if self.traj is None:
+        if self.multi_traj is None:
             return
-        value = int(round((self._t / max(self.traj.duration, 1e-9)) * self.time_slider.maximum()))
+        value = int(round((self._t / max(self.multi_traj.duration, 1e-9)) * self.time_slider.maximum()))
         self.time_slider.blockSignals(True)
         self.time_slider.setValue(value)
         self.time_slider.blockSignals(False)
 
     def _slider_moved(self, value: int) -> None:
-        if self.traj is None:
+        if self.multi_traj is None:
             return
-        self._t = (value / max(self.time_slider.maximum(), 1)) * self.traj.duration
+        self._t = (value / max(self.time_slider.maximum(), 1)) * self.multi_traj.duration
         if self._playing:
             self._play_t0 = self._t
             self._elapsed.restart()
         self._apply_time(self._t)
 
     def _apply_time(self, t: float) -> None:
-        if self.traj is None or self.tcp is None:
+        if self.multi_traj is None or not self.tcps:
             return
-        pose, kind, label = self.traj.at_time(t)
-        self.tcp.set_pose(pose)
-        self.time_label.setText(f"{t:.2f} / {self.traj.duration:.2f} s")
-        self.seg_label.setText(label or "—")
+        states = self.multi_traj.at_time(t)
+        parts = []
+        for name, tcp in self.tcps.items():
+            pose, kind, label = states[name]
+            tcp.set_pose(pose)
+            tag = name or "main"
+            parts.append(f"{tag}: {label or kind}")
+        self.time_label.setText(f"{t:.2f} / {self.multi_traj.duration:.2f} s")
+        primary = next(iter(states.values()))
+        _, kind, label = primary
+        self.seg_label.setText(" | ".join(parts) if len(parts) > 1 else (label or "—"))
         self.seg_label.setStyleSheet(f"color: {KIND_COLORS.get(kind, '#ECEFF1')};")
         self.plotter.render()
 

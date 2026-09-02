@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from tdl import geometry as G
+from tdl.context import SystemContext
 from tdl.schema import Limits, Task
 from tdl.sequence import Step, expand_sequence
 
@@ -18,6 +19,7 @@ class Knot:
     label: str
     dwell: float = 0.0
     linear: bool = False
+    gate_ref: str | None = None
 
 
 @dataclass
@@ -48,13 +50,18 @@ class Trajectory:
 
 
 def knots_from_task(task: Task) -> list[Knot]:
-    steps = expand_sequence(task)
+    return knots_from_context(SystemContext.from_task(task), task)
+
+
+def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
+    steps = expand_sequence(task, ctx)
     rest = task.robot.rest.tool.matrix(task.degrees)
+    prefix = f"{ctx.name}:" if ctx.name else ""
     knots: list[Knot] = []
 
     for step in steps:
         if step.kind == "rest":
-            knots.append(Knot(rest, "rest", "rest"))
+            knots.append(Knot(rest, "rest", f"{prefix}rest"))
             continue
         if step.kind == "move":
             path = task.free_space[step.ref]
@@ -63,23 +70,50 @@ def knots_from_task(task: Task) -> list[Knot]:
                     Knot(
                         wp.matrix(task.degrees),
                         "transit",
-                        f"move:{step.ref}[{i}]",
+                        f"{prefix}move:{step.ref}[{i}]",
                     )
                 )
             continue
         if step.kind == "keyhole":
-            kh = task.keyholes[step.ref]
-            knots.append(Knot(kh.matrix(task.degrees), "keyhole", f"keyhole:{step.ref}"))
+            kh = ctx.keyholes[step.ref]
+            knots.append(Knot(kh.matrix(task.degrees), "keyhole", f"{prefix}keyhole:{step.ref}"))
+            continue
+        if step.kind == "gate":
+            gate = ctx.gates[step.ref]
+            knots.append(
+                Knot(
+                    gate.matrix(task.degrees),
+                    "gate",
+                    f"{prefix}gate:{step.ref}",
+                    linear=True,
+                    gate_ref=step.ref,
+                )
+            )
             continue
         if step.kind == "pause":
             if not knots:
                 raise ValueError("pause cannot be the first sequence item")
             prev = knots[-1]
             knots.append(
-                Knot(prev.pose.copy(), "pause", f"pause {step.hold:.2f}s", dwell=step.hold)
+                Knot(prev.pose.copy(), "pause", f"{prefix}pause {step.hold:.2f}s", dwell=step.hold)
             )
             continue
-        loc = task.locations[step.ref]
+        if step.kind.startswith("fp_"):
+            fp = ctx.force_pushes[step.ref]
+            approach = fp.approach_pose(task.degrees)
+            start = fp.start_pose(task.degrees)
+            push_end = fp.push_end_pose(task.degrees)
+            retract = fp.retract_pose(task.degrees)
+            if step.kind == "fp_approach":
+                knots.append(Knot(approach, "fp_approach", f"{prefix}approach:{step.ref}"))
+            elif step.kind == "fp_start":
+                knots.append(Knot(start, "fp_start", f"{prefix}start:{step.ref}", linear=fp.approach is not None))
+            elif step.kind == "fp_push":
+                knots.append(Knot(push_end, "fp_push", f"{prefix}push:{step.ref}", linear=True))
+            elif step.kind == "fp_retract":
+                knots.append(Knot(retract, "fp_retract", f"{prefix}retract:{step.ref}", linear=True))
+            continue
+        loc = ctx.locations[step.ref]
         pre, tgt, post = loc.cartesian_poses(task.degrees, visit=step.visit)
         slot = loc.pattern.slot_suffix(step.visit) if loc.pattern is not None else ""
         if step.kind in {"approach", "pre"}:
@@ -109,7 +143,7 @@ def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
     out = [knots[0]]
     for k in knots[1:]:
         lin, ang = G.geodesic_metrics(out[-1].pose, k.pose)
-        if k.kind == "pause" or out[-1].kind == "pause":
+        if k.kind == "pause" or k.kind == "gate" or out[-1].kind in {"pause", "gate"}:
             out.append(k)
             continue
         if lin < 1e-9 and ang < 1e-9:
@@ -240,4 +274,6 @@ def time_parameterize(
 
 
 def build_trajectory(task: Task, limits: Limits | None = None, dt: float = 1 / 60) -> Trajectory:
-    return time_parameterize(knots_from_task(task), limits or task.limits, task.degrees, dt=dt)
+    from tdl.multi import build_multi_trajectory
+
+    return build_multi_trajectory(task, limits_override=limits, dt=dt).primary()

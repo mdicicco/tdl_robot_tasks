@@ -250,6 +250,99 @@ class Location(BaseModel):
         return post[-1] if post else target
 
 
+class PushSpec(BaseModel):
+    """Compliant push along a direction until force limit or max travel."""
+
+    axis: tuple[float, float, float] | None = None
+    azimuth: float | None = None
+    elevation: float | None = None
+    max_travel: float = Field(gt=0.0)
+    force_limit: float = Field(default=50.0, gt=0.0)
+
+    def direction(self, degrees: bool) -> np.ndarray:
+        if self.axis is not None:
+            return G.normalize(self.axis)
+        az = 0.0 if self.azimuth is None else self.azimuth
+        if self.elevation is None:
+            el = -90.0 if degrees else -np.pi / 2
+        else:
+            el = self.elevation
+        return G.spherical_direction(az, el, degrees=degrees)
+
+    def offset(self, degrees: bool, traveled: float | None = None) -> np.ndarray:
+        dist = self.max_travel if traveled is None else float(traveled)
+        return self.direction(degrees) * dist
+
+
+class ForcePush(BaseModel):
+    description: str = ""
+    target: Frame
+    approach: ApproachSpec | None = None
+    push: PushSpec
+    retract: ApproachSpec = Field(default_factory=ApproachSpec)
+
+    def start_pose(self, degrees: bool) -> np.ndarray:
+        return self.target.matrix(degrees)
+
+    def approach_pose(self, degrees: bool) -> np.ndarray:
+        start = self.start_pose(degrees)
+        if self.approach is None:
+            return start
+        return start @ G.translate(self.approach.offset(degrees))
+
+    def traveled_distance(self) -> float:
+        # Until force feedback exists, always travel the full max distance.
+        return float(self.push.max_travel)
+
+    def push_end_pose(self, degrees: bool) -> np.ndarray:
+        start = self.start_pose(degrees)
+        return start @ G.translate(self.push.offset(degrees, traveled=self.traveled_distance()))
+
+    def retract_pose(self, degrees: bool) -> np.ndarray:
+        return self.push_end_pose(degrees) @ G.translate(self.retract.offset(degrees))
+
+
+class Sensor(BaseModel):
+    """Presence region tied to a gate. Reads true while that gate is held."""
+
+    description: str = ""
+    xyz: tuple[float, float, float]
+    radius: float = Field(gt=0.0)
+    gate: str | None = None
+
+    def contains(self, point: np.ndarray) -> bool:
+        p = np.asarray(point, dtype=float).reshape(3)
+        c = np.asarray(self.xyz, dtype=float)
+        return float(np.linalg.norm(p - c)) <= float(self.radius)
+
+    def active(self, positions: dict[str, np.ndarray], held_gates: set[str]) -> bool:
+        if self.gate is not None:
+            return self.gate in held_gates
+        return any(self.contains(p) for p in positions.values())
+
+
+class Gate(BaseModel):
+    """Wait pose released when the named sensor reads true."""
+
+    description: str = ""
+    pose: Frame
+    until: str
+
+    def matrix(self, degrees: bool) -> np.ndarray:
+        return self.pose.matrix(degrees)
+
+
+class SystemSpec(BaseModel):
+    """One parallel pick/place line with its own locations and sequence."""
+
+    description: str = ""
+    limits: Limits | None = None
+    locations: dict[str, Location] = Field(default_factory=dict)
+    keyholes: dict[str, Keyhole] = Field(default_factory=dict)
+    force_pushes: dict[str, ForcePush] = Field(default_factory=dict)
+    sequence: list[Any] = Field(default_factory=list)
+
+
 class Keyhole(Frame):
     """Via pose that free-space motion must pass through.
 
@@ -279,11 +372,27 @@ class RepeatBlock(BaseModel):
 
 
 class Step(BaseModel):
-    kind: Literal["rest", "move", "approach", "target", "retract", "keyhole", "pre", "post", "pause"]
+    kind: Literal[
+        "rest",
+        "move",
+        "approach",
+        "target",
+        "retract",
+        "keyhole",
+        "pre",
+        "post",
+        "pause",
+        "fp_approach",
+        "fp_start",
+        "fp_push",
+        "fp_retract",
+        "gate",
+    ]
     ref: str | None = None
     index: int = 0
     visit: int = 0
     hold: float = 0.0
+    gate_ref: str | None = None
 
 
 class Task(BaseModel):
@@ -295,7 +404,11 @@ class Task(BaseModel):
     robot: Robot = Field(default_factory=Robot)
     limits: Limits = Field(default_factory=Limits)
     locations: dict[str, Location] = Field(default_factory=dict)
+    force_pushes: dict[str, ForcePush] = Field(default_factory=dict)
     keyholes: dict[str, Keyhole] = Field(default_factory=dict)
+    sensors: dict[str, Sensor] = Field(default_factory=dict)
+    gates: dict[str, Gate] = Field(default_factory=dict)
+    systems: dict[str, SystemSpec] = Field(default_factory=dict)
     free_space: dict[str, FreeSpacePath] = Field(default_factory=dict)
     sequence: list[Any] = Field(default_factory=list)
 
@@ -305,8 +418,20 @@ class Task(BaseModel):
 
     @model_validator(mode="after")
     def _unique_names(self) -> Task:
-        overlap = set(self.locations) & set(self.keyholes)
-        if overlap:
-            names = ", ".join(sorted(overlap))
-            raise ValueError(f"name used as both location and keyhole: {names}")
+        pools = {
+            "location": set(self.locations),
+            "force_push": set(self.force_pushes),
+            "keyhole": set(self.keyholes),
+            "sensor": set(self.sensors),
+            "gate": set(self.gates),
+            "system": set(self.systems),
+        }
+        for a, names_a in pools.items():
+            for b, names_b in pools.items():
+                if a >= b:
+                    continue
+                overlap = names_a & names_b
+                if overlap:
+                    joined = ", ".join(sorted(overlap))
+                    raise ValueError(f"name used as both {a} and {b}: {joined}")
         return self

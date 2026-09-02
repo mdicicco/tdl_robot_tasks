@@ -24,6 +24,11 @@ limits:
   angular: 90.0         # deg/s
   approach_linear: 0.08 # m/s along approach / retract / target
 
+io:
+  machine_cycle:
+    description: Tending machine cycle start
+    initial: false
+
 locations:
   pickup:
     description: Pick tray at 12 o'clock (top of the work circle)
@@ -85,6 +90,15 @@ locations:
       - axis: [0.0, 0.0, -1.0]# then retract along world -X (back toward center)
         distance: 0.14
     dwell: 0.40
+    sequence:
+      - approach
+      - target
+      - io:
+          signal: machine_cycle
+          pulse: 0.5
+      - pause: 1.0
+      - post: 0
+      - post: 1
 
 force_pushes:
   punch:
@@ -120,7 +134,6 @@ sequence:
         - pickup
         - keyhole: over_fixture
         - process
-        - pause: 2.0
         - punch
         - dropoff
         - rest

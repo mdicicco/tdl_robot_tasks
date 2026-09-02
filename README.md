@@ -31,6 +31,7 @@ Top-level document (`version: 1`):
 | `robot.rest.joints` | Rest pose in joint space (stored for later execution) |
 | `robot.rest.tool` | Cartesian tool frame used to visualize rest |
 | `locations` | Named pick/place sites |
+| `io` | Digital outputs for external equipment; each has an `initial` on/off state |
 | `force_pushes` | Compliant push operations (approach, push until force or max travel, retract) |
 | `sensors` | Spherical presence regions tied to a gate; active while that gate is held |
 | `gates` | Wait poses; hold until every sensor reads true (mutual rendezvous) |
@@ -48,6 +49,8 @@ Each **location** has:
 - **pre / post** — lists of the same Cartesian specs, any length. `approach` is one `pre` stroke; `retract` is one `post` stroke. Pickup and dropoff use one of each; a process station can insert, then hop up and retract with two `post` moves.
 - **dwell** — hold time at the target
 - **pattern** — optional visit sequence. Each time the location is used, the target shifts to the next slot and wraps. `grid` with `counts` and `step` (target-frame XYZ by default, or `frame: world`) rasters a tray; `offsets` is an explicit list of translations.
+- **io** — optional list of commands fired when a location phase is reached (legacy). Prefer an explicit **sequence** on the location instead.
+- **sequence** — optional ordered sub-steps for a location visit. Interleave `approach`, `target`, `retract`, `pre: <i>`, `post: <i>`, `{pause: <seconds>}`, and `{io: {signal, set/pulse}}` anywhere in the visit. When omitted, the default is all pre strokes, target, then all post strokes.
 
 A **keyhole** is a pose the tool must pass through during free-space motion (a doorway, fixture clearance, etc.). Put one or more `{keyhole: <name>}` steps between two locations; the cubic spline from the previous retract (or rest) to the next approach interpolates through each keyhole. `radius` is the visualized aperture; frame **Z** is the pass-through axis.
 
@@ -63,6 +66,8 @@ The viewer currently travels the full `max_travel` distance (no force feedback y
 A **sensor** is a sphere (`xyz` + `radius`) tied to a `gate`. It reads **true** while that gate is held. A **gate** moves to a wait pose and holds until every sensor reads true (mutual rendezvous). Use `{gate: <name>}` in a sequence.
 
 **systems** run in parallel in the viewer. Each has its own `locations`, optional `limits`, and `sequence`. See `examples/gated_dual_pick_place.yaml` for a two-line handshake demo.
+
+**io** defines named digital outputs (`initial: true/false`). Attach `{io: ...}` steps inside a location **sequence**, or use legacy `io:` with `at:` on the location. The viewer shows a simulated LED per signal (dull off, bright green on).
 
 Sequence steps:
 

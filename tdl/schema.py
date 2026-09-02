@@ -170,6 +170,41 @@ class LocationPattern(BaseModel):
         return f"[{v}]"
 
 
+class IoSignal(BaseModel):
+    """Digital output representing external equipment."""
+
+    description: str = ""
+    initial: bool = False
+
+
+class IoCommand(BaseModel):
+    """Issue an on/off or timed pulse."""
+
+    signal: str
+    at: Literal["target", "approach", "retract", "end"] | None = None
+    set: Literal["on", "off"] | None = None
+    pulse: float | None = Field(default=None, gt=0.0)
+
+    @model_validator(mode="after")
+    def _set_or_pulse(self) -> IoCommand:
+        if self.set is None and self.pulse is None:
+            raise ValueError("io command needs set: on/off or pulse: <seconds>")
+        if self.set is not None and self.pulse is not None:
+            raise ValueError("io command: use set or pulse, not both")
+        return self
+
+    def matches(self, phase: str, index: int, n_pre: int, n_post: int) -> bool:
+        if self.at is None:
+            return False
+        if self.at == "target":
+            return phase == "target"
+        if self.at == "approach":
+            return phase in {"approach", "pre"} and index == 0
+        if self.at in {"retract", "end"}:
+            return phase in {"retract", "post"} and index == n_post - 1
+        return False
+
+
 class Location(BaseModel):
     description: str = ""
     target: Frame
@@ -181,6 +216,8 @@ class Location(BaseModel):
     post: list[ApproachSpec] | None = None
     pattern: LocationPattern | None = None
     dwell: float = 0.25
+    io: list[IoCommand] | None = None
+    sequence: list[Any] | None = None
 
     @model_validator(mode="after")
     def _pre_post_exclusive(self) -> Location:
@@ -188,6 +225,8 @@ class Location(BaseModel):
             raise ValueError("specify pre or approach, not both")
         if self.post is not None and self.retract is not None:
             raise ValueError("specify post or retract, not both")
+        if self.sequence is not None and self.io:
+            raise ValueError("use location sequence for io, or legacy io: with at:, not both")
         return self
 
     def pre_specs(self) -> list[ApproachSpec]:
@@ -248,6 +287,11 @@ class Location(BaseModel):
     def retract_pose(self, degrees: bool, visit: int = 0) -> np.ndarray:
         _, target, post = self.cartesian_poses(degrees, visit=visit)
         return post[-1] if post else target
+
+    def io_at(self, phase: str, index: int, n_pre: int, n_post: int) -> list[IoCommand]:
+        if not self.io:
+            return []
+        return [cmd for cmd in self.io if cmd.matches(phase, index, n_pre, n_post)]
 
 
 class PushSpec(BaseModel):
@@ -387,12 +431,14 @@ class Step(BaseModel):
         "fp_push",
         "fp_retract",
         "gate",
+        "io",
     ]
     ref: str | None = None
     index: int = 0
     visit: int = 0
     hold: float = 0.0
     gate_ref: str | None = None
+    io_command: IoCommand | None = None
 
 
 class Task(BaseModel):
@@ -404,6 +450,7 @@ class Task(BaseModel):
     robot: Robot = Field(default_factory=Robot)
     limits: Limits = Field(default_factory=Limits)
     locations: dict[str, Location] = Field(default_factory=dict)
+    io: dict[str, IoSignal] = Field(default_factory=dict)
     force_pushes: dict[str, ForcePush] = Field(default_factory=dict)
     keyholes: dict[str, Keyhole] = Field(default_factory=dict)
     sensors: dict[str, Sensor] = Field(default_factory=dict)
@@ -420,6 +467,7 @@ class Task(BaseModel):
     def _unique_names(self) -> Task:
         pools = {
             "location": set(self.locations),
+            "io": set(self.io),
             "force_push": set(self.force_pushes),
             "keyhole": set(self.keyholes),
             "sensor": set(self.sensors),
@@ -434,4 +482,25 @@ class Task(BaseModel):
                 if overlap:
                     joined = ", ".join(sorted(overlap))
                     raise ValueError(f"name used as both {a} and {b}: {joined}")
+        for loc in list(self.locations.values()) + [
+            loc for spec in self.systems.values() for loc in spec.locations.values()
+        ]:
+            io_cmds: list[IoCommand] = list(loc.io or [])
+            if loc.sequence:
+                io_cmds.extend(_io_commands_in_sequence(loc.sequence))
+            for cmd in io_cmds:
+                if cmd.signal not in self.io:
+                    raise ValueError(f"Unknown io signal {cmd.signal!r}")
         return self
+
+
+def _io_commands_in_sequence(items: list[Any]) -> list[IoCommand]:
+    out: list[IoCommand] = []
+    for raw in items:
+        if isinstance(raw, dict) and "io" in raw:
+            payload = raw["io"]
+            if isinstance(payload, dict):
+                out.append(IoCommand.model_validate(payload))
+            else:
+                raise ValueError("io step must be a mapping with signal and set or pulse")
+    return out

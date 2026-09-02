@@ -29,6 +29,7 @@ KIND_COLORS = {
     "post": "#AB47BC",
     "retract": "#AB47BC",
     "pause": "#80CBC4",
+    "io": "#AED581",
     "fp_approach": "#FFA726",
     "fp_start": "#66BB6A",
     "fp_push": "#EF5350",

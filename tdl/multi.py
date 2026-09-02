@@ -8,6 +8,7 @@ import numpy as np
 
 from tdl.context import SystemContext
 from tdl.schema import Limits, Task
+from tdl.signals import IoEvent, IoTimeline
 from tdl.trajectory import Segment, Trajectory, knots_from_context, time_parameterize
 
 
@@ -16,6 +17,7 @@ class MultiTrajectory:
     systems: dict[str, Trajectory]
     duration: float
     segments: list[Segment] = field(default_factory=list)
+    io_timeline: IoTimeline | None = None
 
     @property
     def is_multi(self) -> bool:
@@ -56,7 +58,7 @@ def _simulate_gated(
     task: Task,
     uncoupled: dict[str, Trajectory],
     dt: float,
-) -> dict[str, Trajectory]:
+) -> tuple[dict[str, Trajectory], list[IoEvent]]:
     names = list(uncoupled)
     gate_arrivals = {n: _gate_arrival(uncoupled[n]) for n in names}
     released = {n: gate_arrivals[n][0] is None for n in names}
@@ -66,10 +68,20 @@ def _simulate_gated(
     last_kind: dict[str, str] = {}
     last_label: dict[str, str] = {}
 
+    pending_io: dict[str, list[IoEvent]] = {
+        n: sorted(uncoupled[n].io_events, key=lambda e: e.time) for n in names
+    }
+    io_merged: list[IoEvent] = []
     times: dict[str, list[float]] = {n: [] for n in names}
     poses: dict[str, list[np.ndarray]] = {n: [] for n in names}
     kinds: dict[str, list[str]] = {n: [] for n in names}
     labels: dict[str, list[str]] = {n: [] for n in names}
+
+    def _flush_io(n: str, global_t: float) -> None:
+        queue = pending_io[n]
+        while queue and local_t[n] >= queue[0].time - 1e-9:
+            ev = queue.pop(0)
+            io_merged.append(IoEvent(global_t, ev.signal, ev.on))
 
     global_t = 0.0
     max_t = max(traj.duration for traj in uncoupled.values()) + 120.0
@@ -122,14 +134,19 @@ def _simulate_gated(
                 continue
             arrive_t, _, _ = gate_arrivals[n]
             if arrive_t is not None and local_t[n] >= arrive_t - 1e-9 and not released[n]:
+                _flush_io(n, global_t)
                 continue
+            prev_local = local_t[n]
             if local_t[n] >= uncoupled[n].duration - 1e-9:
+                _flush_io(n, global_t)
                 done[n] = True
                 continue
             next_t = local_t[n] + dt
             if arrive_t is not None and local_t[n] < arrive_t <= next_t:
                 next_t = arrive_t
             local_t[n] = min(next_t, uncoupled[n].duration)
+            if local_t[n] > prev_local + 1e-9:
+                _flush_io(n, global_t)
 
         if all(done[n] for n in names):
             break
@@ -146,7 +163,7 @@ def _simulate_gated(
             segments=segs,
             duration=float(times[n][-1]) if times[n] else 0.0,
         )
-    return out
+    return out, io_merged
 
 
 def _segments_from_samples(times: list[float], kinds: list[str], labels: list[str]) -> list[Segment]:
@@ -174,7 +191,13 @@ def build_multi_trajectory(
     if not task.systems:
         limits = limits_override or task.limits
         traj = time_parameterize(knots_from_context(SystemContext.from_task(task), task), limits, task.degrees, dt=dt)
-        return MultiTrajectory(systems={"": traj}, duration=traj.duration, segments=traj.segments)
+        io_timeline = IoTimeline.from_task(task, [traj.io_events]) if task.io else None
+        return MultiTrajectory(
+            systems={"": traj},
+            duration=traj.duration,
+            segments=traj.segments,
+            io_timeline=io_timeline,
+        )
 
     uncoupled: dict[str, Trajectory] = {}
     for name in task.systems:
@@ -182,10 +205,13 @@ def build_multi_trajectory(
         limits = limits_override or ctx.limits(task)
         uncoupled[name] = time_parameterize(knots_from_context(ctx, task), limits, task.degrees, dt=dt)
 
+    io_event_lists: list[list[IoEvent]] = []
     if task.gates and task.sensors:
-        coupled = _simulate_gated(task, uncoupled, dt=dt)
+        coupled, io_merged = _simulate_gated(task, uncoupled, dt=dt)
+        io_event_lists = [io_merged]
     else:
         coupled = uncoupled
+        io_event_lists = [traj.io_events for traj in uncoupled.values()]
 
     duration = max(traj.duration for traj in coupled.values())
     merged: list[Segment] = []
@@ -194,4 +220,5 @@ def build_multi_trajectory(
         for seg in traj.segments:
             merged.append(Segment(seg.t0, seg.t1, seg.kind, prefix + seg.label))
     merged.sort(key=lambda s: s.t0)
-    return MultiTrajectory(systems=coupled, duration=duration, segments=merged)
+    io_timeline = IoTimeline.from_task(task, io_event_lists) if task.io else None
+    return MultiTrajectory(systems=coupled, duration=duration, segments=merged, io_timeline=io_timeline)

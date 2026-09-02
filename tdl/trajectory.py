@@ -8,8 +8,9 @@ import numpy as np
 
 from tdl import geometry as G
 from tdl.context import SystemContext
-from tdl.schema import Limits, Task
+from tdl.schema import IoCommand, Limits, Task
 from tdl.sequence import Step, expand_sequence
+from tdl.signals import IoEvent, events_from_commands
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Knot:
     dwell: float = 0.0
     linear: bool = False
     gate_ref: str | None = None
+    io_commands: list[IoCommand] = field(default_factory=list)
 
 
 @dataclass
@@ -39,6 +41,7 @@ class Trajectory:
     segments: list[Segment]
     duration: float
     knots: list[Knot] = field(default_factory=list)
+    io_events: list[IoEvent] = field(default_factory=list)
 
     def at_time(self, time: float) -> tuple[np.ndarray, str, str]:
         if len(self.t) == 0:
@@ -94,8 +97,21 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
             if not knots:
                 raise ValueError("pause cannot be the first sequence item")
             prev = knots[-1]
+            label = f"{prefix}pause {step.hold:.2f}s"
+            if step.ref:
+                label = f"{prefix}{step.ref}:pause {step.hold:.2f}s"
+            knots.append(Knot(prev.pose.copy(), "pause", label, dwell=step.hold))
+            continue
+        if step.kind == "io":
+            if not knots:
+                raise ValueError("io cannot be the first sequence item")
+            if step.io_command is None:
+                raise ValueError("io step missing command")
+            prev = knots[-1]
+            cmd = step.io_command
+            label = f"{prefix}{step.ref}:io:{cmd.signal}" if step.ref else f"{prefix}io:{cmd.signal}"
             knots.append(
-                Knot(prev.pose.copy(), "pause", f"{prefix}pause {step.hold:.2f}s", dwell=step.hold)
+                Knot(prev.pose.copy(), "io", label, io_commands=[cmd])
             )
             continue
         if step.kind.startswith("fp_"):
@@ -116,24 +132,38 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
         loc = ctx.locations[step.ref]
         pre, tgt, post = loc.cartesian_poses(task.degrees, visit=step.visit)
         slot = loc.pattern.slot_suffix(step.visit) if loc.pattern is not None else ""
+        n_pre = len(pre)
+        n_post = len(post)
         if step.kind in {"approach", "pre"}:
             if step.index >= len(pre):
                 raise IndexError(f"{step.kind} index {step.index} out of range for {step.ref!r}")
             n = len(pre)
             label = f"approach:{step.ref}{slot}" if n == 1 else f"pre:{step.ref}{slot}[{step.index}]"
+            phase = "approach" if step.index == 0 else "pre"
+            io_cmds = loc.io_at(phase, step.index, n_pre, n_post)
             knots.append(
-                Knot(pre[step.index], step.kind, label, linear=step.index > 0)
+                Knot(pre[step.index], step.kind, label, linear=step.index > 0, io_commands=io_cmds)
             )
         elif step.kind == "target":
+            io_cmds = loc.io_at("target", 0, n_pre, n_post)
             knots.append(
-                Knot(tgt, "target", f"target:{step.ref}{slot}", dwell=loc.dwell, linear=len(pre) > 0)
+                Knot(
+                    tgt,
+                    "target",
+                    f"target:{step.ref}{slot}",
+                    dwell=loc.dwell,
+                    linear=len(pre) > 0,
+                    io_commands=io_cmds,
+                )
             )
         elif step.kind in {"retract", "post"}:
             if step.index >= len(post):
                 raise IndexError(f"{step.kind} index {step.index} out of range for {step.ref!r}")
             n = len(post)
             label = f"retract:{step.ref}{slot}" if n == 1 else f"post:{step.ref}{slot}[{step.index}]"
-            knots.append(Knot(post[step.index], step.kind, label, linear=True))
+            phase = "retract" if step.index == n_post - 1 else "post"
+            io_cmds = loc.io_at(phase, step.index, n_pre, n_post)
+            knots.append(Knot(post[step.index], step.kind, label, linear=True, io_commands=io_cmds))
     return _dedupe_adjacent(knots)
 
 
@@ -143,7 +173,7 @@ def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
     out = [knots[0]]
     for k in knots[1:]:
         lin, ang = G.geodesic_metrics(out[-1].pose, k.pose)
-        if k.kind == "pause" or k.kind == "gate" or out[-1].kind in {"pause", "gate"}:
+        if k.kind == "pause" or k.kind == "gate" or k.kind == "io" or out[-1].kind in {"pause", "gate", "io"}:
             out.append(k)
             continue
         if lin < 1e-9 and ang < 1e-9:
@@ -151,6 +181,7 @@ def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
             out[-1].label = k.label
             out[-1].kind = k.kind
             out[-1].linear = k.linear
+            out[-1].io_commands = list(out[-1].io_commands) + list(k.io_commands)
         else:
             out.append(k)
     return out
@@ -182,12 +213,16 @@ def time_parameterize(
     kinds: list[str] = []
     labels: list[str] = []
     segments: list[Segment] = []
+    io_events: list[IoEvent] = []
 
     t = 0.0
     times.append(t)
     poses.append(knots[0].pose.copy())
     kinds.append(knots[0].kind)
     labels.append(knots[0].label)
+
+    def emit_io(commands: list[IoCommand], at: float) -> None:
+        io_events.extend(events_from_commands(commands, at))
 
     def sample_hold(pose: np.ndarray, kind: str, label: str, hold: float) -> None:
         nonlocal t
@@ -203,6 +238,7 @@ def time_parameterize(
             labels.append(label)
         t = t_end
 
+    emit_io(knots[0].io_commands, t)
     sample_hold(knots[0].pose, knots[0].kind, knots[0].label, knots[0].dwell)
 
     def sample_linear(a: Knot, b: Knot) -> None:
@@ -219,6 +255,7 @@ def time_parameterize(
             labels.append(b.label)
         t = t0 + duration
         segments.append(Segment(t0, t, b.kind, b.label))
+        emit_io(b.io_commands, t)
         sample_hold(b.pose, b.kind, b.label, b.dwell)
 
     def sample_spline(chain: list[Knot]) -> None:
@@ -238,13 +275,20 @@ def time_parameterize(
             labels.append(dest.label)
         t = t0 + duration
         for i, b in enumerate(chain[1:], start=1):
+            knot_t = t0 + duration * float(knot_frac[i - 1])
+            emit_io(b.io_commands, knot_t)
             segments.append(
-                Segment(t0 + duration * float(knot_frac[i - 1]), t0 + duration * float(knot_frac[i]), b.kind, b.label)
+                Segment(knot_t, t0 + duration * float(knot_frac[i]), b.kind, b.label)
             )
         sample_hold(chain[-1].pose, chain[-1].kind, chain[-1].label, chain[-1].dwell)
 
     i = 0
     while i < len(knots) - 1:
+        if knots[i + 1].kind == "io":
+            emit_io(knots[i + 1].io_commands, t)
+            segments.append(Segment(t, t, "io", knots[i + 1].label))
+            i += 1
+            continue
         if knots[i + 1].kind == "pause":
             t0 = t
             sample_hold(knots[i].pose, "pause", knots[i + 1].label, knots[i + 1].dwell)
@@ -257,7 +301,12 @@ def time_parameterize(
             i += 1
             continue
         j = i + 1
-        while j < len(knots) - 1 and not knots[j + 1].linear and knots[j].dwell <= 0:
+        while (
+            j < len(knots) - 1
+            and not knots[j + 1].linear
+            and knots[j].dwell <= 0
+            and knots[j + 1].kind not in {"pause", "io"}
+        ):
             j += 1
         sample_spline(knots[i : j + 1])
         i = j
@@ -270,6 +319,7 @@ def time_parameterize(
         segments=segments,
         duration=float(times[-1]),
         knots=knots,
+        io_events=io_events,
     )
 
 

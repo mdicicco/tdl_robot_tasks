@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from tdl.context import SystemContext
-from tdl.schema import RepeatBlock, Step, Task
+from tdl.schema import IoCommand, Location, RepeatBlock, Step, Task
 
 _KINDS = ("move", "approach", "target", "retract", "keyhole", "location", "pre", "post", "gate")
 
@@ -25,19 +25,7 @@ def parse_item(raw: Any) -> Step | RepeatBlock | str:
     if raw.get("type") == "rest" or "rest" in raw and len(raw) == 1:
         return Step(kind="rest")
     if "pause" in raw:
-        val = raw["pause"]
-        if isinstance(val, (int, float)):
-            hold = float(val)
-        elif isinstance(val, dict):
-            raw_hold = val.get("seconds", val.get("duration", val.get("hold")))
-            if raw_hold is None:
-                raise ValueError("pause mapping must include seconds")
-            hold = float(raw_hold)
-        else:
-            raise ValueError("pause must be a number of seconds")
-        if hold < 0:
-            raise ValueError("pause duration must be >= 0")
-        return Step(kind="pause", hold=hold)
+        return _parse_pause(raw["pause"])
     if "gate" in raw:
         ref = raw["gate"]
         if not isinstance(ref, str):
@@ -52,6 +40,64 @@ def parse_item(raw: Any) -> Step | RepeatBlock | str:
                 return ref
             return Step(kind=kind, ref=ref)
     raise ValueError(f"Unrecognized sequence item: {raw}")
+
+
+def _parse_pause(val: Any) -> Step:
+    if isinstance(val, (int, float)):
+        hold = float(val)
+    elif isinstance(val, dict):
+        raw_hold = val.get("seconds", val.get("duration", val.get("hold")))
+        if raw_hold is None:
+            raise ValueError("pause mapping must include seconds")
+        hold = float(raw_hold)
+    else:
+        raise ValueError("pause must be a number of seconds")
+    if hold < 0:
+        raise ValueError("pause duration must be >= 0")
+    return Step(kind="pause", hold=hold)
+
+
+def _parse_io(val: Any) -> IoCommand:
+    if not isinstance(val, dict):
+        raise ValueError("io step must be a mapping with signal and set or pulse")
+    return IoCommand.model_validate(val)
+
+
+def parse_location_item(raw: Any, loc_name: str, visit: int, loc: Location) -> Step:
+    if isinstance(raw, str):
+        if raw == "approach":
+            return Step(kind="approach", ref=loc_name, index=0, visit=visit)
+        if raw == "target":
+            return Step(kind="target", ref=loc_name, visit=visit)
+        if raw == "retract":
+            n_post = len(loc.post_specs())
+            if n_post == 0:
+                raise ValueError(f"location {loc_name!r} has no retract/post strokes")
+            return Step(kind="retract", ref=loc_name, index=n_post - 1, visit=visit)
+        raise ValueError(f"Unrecognized location sequence item {raw!r} for {loc_name!r}")
+    if not isinstance(raw, dict):
+        raise ValueError(f"Location sequence item must be a string or mapping, got {type(raw)}")
+    if "pause" in raw:
+        step = _parse_pause(raw["pause"])
+        return Step(kind="pause", hold=step.hold, ref=loc_name, visit=visit)
+    if "io" in raw:
+        return Step(kind="io", ref=loc_name, visit=visit, io_command=_parse_io(raw["io"]))
+    if "approach" in raw:
+        return Step(kind="approach", ref=loc_name, index=0, visit=visit)
+    if "target" in raw:
+        return Step(kind="target", ref=loc_name, visit=visit)
+    if "retract" in raw:
+        n_post = len(loc.post_specs())
+        if n_post == 0:
+            raise ValueError(f"location {loc_name!r} has no retract/post strokes")
+        return Step(kind="retract", ref=loc_name, index=n_post - 1, visit=visit)
+    if "pre" in raw:
+        index = int(raw["pre"])
+        return Step(kind="pre", ref=loc_name, index=index, visit=visit)
+    if "post" in raw:
+        index = int(raw["post"])
+        return Step(kind="post", ref=loc_name, index=index, visit=visit)
+    raise ValueError(f"Unrecognized location sequence item {raw!r} for {loc_name!r}")
 
 
 def expand_sequence(task: Task, ctx: SystemContext | None = None) -> list[Step]:
@@ -75,6 +121,33 @@ def _expand_list(items: list[Any], task: Task, ctx: SystemContext, visits: dict[
     return out
 
 
+def _expand_location(name: str, loc: Location, visit: int) -> list[Step]:
+    if loc.sequence is not None:
+        steps: list[Step] = []
+        n_pre = len(loc.pre_specs())
+        n_post = len(loc.post_specs())
+        for raw in loc.sequence:
+            step = parse_location_item(raw, name, visit, loc)
+            if step.kind in {"approach", "pre"} and step.index >= n_pre:
+                raise IndexError(f"pre index {step.index} out of range for {name!r}")
+            if step.kind in {"retract", "post"} and step.index >= n_post:
+                raise IndexError(f"post index {step.index} out of range for {name!r}")
+            steps.append(step)
+        return steps
+
+    steps: list[Step] = []
+    n_pre = len(loc.pre_specs())
+    for i in range(n_pre):
+        kind = "approach" if i == 0 else "pre"
+        steps.append(Step(kind=kind, ref=name, index=i, visit=visit))
+    steps.append(Step(kind="target", ref=name, visit=visit))
+    n_post = len(loc.post_specs())
+    for i in range(n_post):
+        kind = "retract" if i == n_post - 1 else "post"
+        steps.append(Step(kind=kind, ref=name, index=i, visit=visit))
+    return steps
+
+
 def _resolve_name(name: str, task: Task, ctx: SystemContext, visits: dict[str, int]) -> list[Step]:
     if name == "rest":
         return [Step(kind="rest")]
@@ -82,17 +155,7 @@ def _resolve_name(name: str, task: Task, ctx: SystemContext, visits: dict[str, i
         loc = ctx.locations[name]
         visit = visits.get(name, 0)
         visits[name] = visit + 1
-        steps: list[Step] = []
-        n_pre = len(loc.pre_specs())
-        for i in range(n_pre):
-            kind = "approach" if i == 0 else "pre"
-            steps.append(Step(kind=kind, ref=name, index=i, visit=visit))
-        steps.append(Step(kind="target", ref=name, visit=visit))
-        n_post = len(loc.post_specs())
-        for i in range(n_post):
-            kind = "retract" if i == n_post - 1 else "post"
-            steps.append(Step(kind=kind, ref=name, index=i, visit=visit))
-        return steps
+        return _expand_location(name, loc, visit)
     if name in ctx.force_pushes:
         fp = ctx.force_pushes[name]
         steps: list[Step] = []
@@ -111,6 +174,12 @@ def _resolve_name(name: str, task: Task, ctx: SystemContext, visits: dict[str, i
 
 def _validate_step(step: Step, task: Task, ctx: SystemContext) -> None:
     if step.kind in {"rest", "pause"}:
+        return
+    if step.kind == "io":
+        if step.io_command is None:
+            raise ValueError("io step missing command")
+        if step.io_command.signal not in task.io:
+            raise KeyError(f"Unknown io signal {step.io_command.signal!r}")
         return
     if step.kind == "gate":
         if step.ref not in ctx.gates:

@@ -37,6 +37,32 @@ from tdl.schema import Limits, Task
 from tdl.viz import KIND_COLORS, SYSTEM_TCP_COLORS, TcpActor, add_static_scene
 
 
+class IoLedRow(QWidget):
+    def __init__(self, name: str, description: str = ""):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        self.led = QLabel()
+        self.led.setFixedSize(14, 14)
+        self.label = QLabel(name)
+        self.label.setStyleSheet("font-weight: 600;")
+        row.addWidget(self.led)
+        row.addWidget(self.label, stretch=1)
+        if description:
+            self.setToolTip(description)
+        self.set_on(False)
+
+    def set_on(self, on: bool) -> None:
+        if on:
+            self.led.setStyleSheet(
+                "background-color: #00E676; border-radius: 7px; border: 1px solid #69F0AE;"
+            )
+        else:
+            self.led.setStyleSheet(
+                "background-color: #37474F; border-radius: 7px; border: 1px solid #546E7A;"
+            )
+
+
 def _example_path() -> Path:
     here = Path(__file__).resolve().parent.parent / "examples" / "pick_and_place.yaml"
     return here
@@ -54,6 +80,8 @@ class Viewer(QMainWindow):
         self._t = 0.0
         self._play_t0 = 0.0
         self._elapsed = QElapsedTimer()
+        self.io_panel: QGroupBox | None = None
+        self.io_leds: dict[str, IoLedRow] = {}
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -145,6 +173,12 @@ class Viewer(QMainWindow):
         form.addRow("Approach", self.spin_app)
         v.addWidget(limits)
 
+        self.io_panel = QGroupBox("I/O")
+        self.io_layout = QVBoxLayout(self.io_panel)
+        self.io_layout.setContentsMargins(8, 8, 8, 8)
+        self.io_layout.setSpacing(2)
+        v.addWidget(self.io_panel)
+
         self.follow = QCheckBox("Reset camera on load")
         self.follow.setChecked(True)
         v.addWidget(self.follow)
@@ -218,6 +252,7 @@ class Viewer(QMainWindow):
             color = SYSTEM_TCP_COLORS.get(name, "#FFECB3")
             self.tcps[name] = TcpActor(self.plotter, name=label, ball_color=color)
         self._fill_sequence()
+        self._rebuild_io_panel()
         if reset_camera and self.follow.isChecked():
             self.plotter.view_isometric()
             self.plotter.reset_camera()
@@ -238,6 +273,24 @@ class Viewer(QMainWindow):
             item.setToolTip(seg.kind)
             item.setData(Qt.ItemDataRole.UserRole + 1, color)
             self.seq_list.addItem(item)
+
+    def _rebuild_io_panel(self) -> None:
+        assert self.io_panel is not None
+        while self.io_layout.count():
+            item = self.io_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.io_leds.clear()
+        if self.task is None or not self.task.io:
+            self.io_panel.hide()
+            return
+        self.io_panel.show()
+        for name in sorted(self.task.io):
+            sig = self.task.io[name]
+            row = IoLedRow(name, sig.description)
+            self.io_layout.addWidget(row)
+            self.io_leds[name] = row
+        self.io_layout.addStretch(1)
 
     def _jump_to_item(self, item: QListWidgetItem) -> None:
         t0 = float(item.data(Qt.ItemDataRole.UserRole))
@@ -310,6 +363,10 @@ class Viewer(QMainWindow):
         _, kind, label = primary
         self.seg_label.setText(" | ".join(parts) if len(parts) > 1 else (label or "—"))
         self.seg_label.setStyleSheet(f"color: {KIND_COLORS.get(kind, '#ECEFF1')};")
+        if self.multi_traj.io_timeline is not None:
+            io_state = self.multi_traj.io_timeline.state_at(t)
+            for name, row in self.io_leds.items():
+                row.set_on(io_state.get(name, False))
         self.plotter.render()
 
 

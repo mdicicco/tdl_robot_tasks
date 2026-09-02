@@ -7,6 +7,10 @@ from typing import Any
 from tdl.context import SystemContext
 from tdl.schema import ForcePush, IoCommand, Location, RepeatBlock, Step, Task
 
+
+def _tag_tower(steps: list[Step], task_name: str | None) -> list[Step]:
+    return [step.model_copy(update={"tower_task": task_name}) for step in steps]
+
 _KINDS = ("move", "approach", "target", "retract", "keyhole", "location", "pre", "post", "gate")
 
 
@@ -201,9 +205,9 @@ def _resolve_name(name: str, task: Task, ctx: SystemContext, visits: dict[str, i
         loc = ctx.locations[name]
         visit = visits.get(name, 0)
         visits[name] = visit + 1
-        return _expand_location(name, loc, visit)
+        return _tag_tower(_expand_location(name, loc, visit), name)
     if name in ctx.force_pushes:
-        return _expand_force_push(name, ctx.force_pushes[name])
+        return _tag_tower(_expand_force_push(name, ctx.force_pushes[name]), name)
     if name in ctx.keyholes:
         return [Step(kind="keyhole", ref=name)]
     raise KeyError(

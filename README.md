@@ -32,6 +32,7 @@ Top-level document (`version: 1`):
 | `robot.rest.tool` | Cartesian tool frame used to visualize rest |
 | `locations` | Named pick/place sites |
 | `io` | Digital outputs for external equipment; each has an `initial` on/off state |
+| `tower_lights` | Stack lights with indexed `states` and per-task color mapping |
 | `force_pushes` | Compliant push operations (approach, push until force or max travel, retract) |
 | `sensors` | Spherical presence regions tied to a gate; active while that gate is held |
 | `gates` | Wait poses; hold until every sensor reads true (mutual rendezvous) |
@@ -69,6 +70,8 @@ A **sensor** is a sphere (`xyz` + `radius`) tied to a `gate`. It reads **true** 
 **systems** run in parallel in the viewer. Each has its own `locations`, optional `limits`, and `sequence`. See `examples/gated_dual_pick_place.yaml` for a two-line handshake demo.
 
 **io** defines named digital outputs (`initial: true/false`). Attach `{io: ...}` steps inside a location or force-push **sequence**. Use quoted `"on"` / `"off"` for discrete sets in YAML (`on` and `off` parse as booleans). The viewer shows a simulated LED per signal (dull off, bright green on).
+
+**tower_lights** are stack indicators with an ordered `states` list (`name` + `color` per lamp). Map sequence sub-tasks to state indices with `tasks:`. During transport between tasks none of the lamps are lit; each lamp shows its color dimly until its task is active, then brightens. The viewer shows a vertical stack with one lamp per state.
 
 Sequence steps:
 

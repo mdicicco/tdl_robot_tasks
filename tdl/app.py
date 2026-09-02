@@ -11,6 +11,7 @@ os.environ.setdefault("QT_API", "pyside6")
 
 import numpy as np
 from PySide6.QtCore import QElapsedTimer, Qt, QTimer
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -33,7 +34,7 @@ from pyvistaqt import QtInteractor
 
 from tdl.io import load_task
 from tdl.multi import MultiTrajectory, build_multi_trajectory
-from tdl.schema import Limits, Task
+from tdl.schema import Limits, Task, TowerLight, TowerLightState
 from tdl.viz import KIND_COLORS, SYSTEM_TCP_COLORS, TcpActor, add_static_scene
 
 
@@ -63,6 +64,60 @@ class IoLedRow(QWidget):
             )
 
 
+class TowerLightStack(QWidget):
+    def __init__(self, name: str, light: TowerLight):
+        super().__init__()
+        self._states = list(light.states)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(4)
+        title = QLabel(name)
+        title.setStyleSheet("font-weight: 600;")
+        layout.addWidget(title)
+        stack = QVBoxLayout()
+        stack.setSpacing(3)
+        self._lamps: list[tuple[TowerLightState, QLabel]] = []
+        for state in reversed(self._states):
+            row = QHBoxLayout()
+            lamp = QLabel()
+            lamp.setFixedSize(16, 16)
+            row.addWidget(lamp)
+            label = QLabel(state.name)
+            label.setStyleSheet("color: #90A4AE;")
+            row.addWidget(label, stretch=1)
+            stack.addLayout(row)
+            self._lamps.append((state, lamp))
+        layout.addLayout(stack)
+        self._status = QLabel("—")
+        self._status.setStyleSheet("color: #78909C; font-size: 11px;")
+        layout.addWidget(self._status)
+        self.set_state(None)
+
+    @staticmethod
+    def _dim_color(color: str, factor: float = 0.28) -> str:
+        hex_color = color.lstrip("#")
+        if len(hex_color) != 6:
+            return "#37474F"
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        return f"#{int(r * factor):02x}{int(g * factor):02x}{int(b * factor):02x}"
+
+    def set_state(self, index: int | None) -> None:
+        for i, (state, lamp) in enumerate(self._lamps):
+            actual_idx = len(self._states) - 1 - i
+            active = index is not None and actual_idx == index
+            fill = state.color if active else self._dim_color(state.color)
+            border = state.color if active else self._dim_color(state.color, 0.45)
+            lamp.setStyleSheet(
+                f"background-color: {fill}; border-radius: 8px; border: 1px solid {border};"
+            )
+        if index is None or not 0 <= index < len(self._states):
+            self._status.setText("—")
+        else:
+            self._status.setText(self._states[index].name)
+
+
 def _example_path() -> Path:
     here = Path(__file__).resolve().parent.parent / "examples" / "pick_and_place.yaml"
     return here
@@ -82,6 +137,9 @@ class Viewer(QMainWindow):
         self._elapsed = QElapsedTimer()
         self.io_panel: QGroupBox | None = None
         self.io_leds: dict[str, IoLedRow] = {}
+        self.tower_panel: QGroupBox | None = None
+        self.tower_widgets: dict[str, TowerLightStack] = {}
+        self._closing = False
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -113,6 +171,22 @@ class Viewer(QMainWindow):
             self.load_file(path)
         else:
             self.statusBar().showMessage("Open a .yaml or .json task file")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._closing = True
+        if hasattr(self, "timer"):
+            self.timer.stop()
+        if hasattr(self, "tcps"):
+            self.tcps.clear()
+        plotter = self.plotter
+        if plotter is not None:
+            try:
+                if not getattr(plotter, "_closed", True):
+                    plotter.close()
+            except Exception:
+                pass
+            self.plotter = None
+        super().closeEvent(event)
 
     def _timeline_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -179,6 +253,12 @@ class Viewer(QMainWindow):
         self.io_layout.setSpacing(2)
         v.addWidget(self.io_panel)
 
+        self.tower_panel = QGroupBox("Tower lights")
+        self.tower_layout = QVBoxLayout(self.tower_panel)
+        self.tower_layout.setContentsMargins(8, 8, 8, 8)
+        self.tower_layout.setSpacing(6)
+        v.addWidget(self.tower_panel)
+
         self.follow = QCheckBox("Reset camera on load")
         self.follow.setChecked(True)
         v.addWidget(self.follow)
@@ -243,6 +323,8 @@ class Viewer(QMainWindow):
         self.time_slider.setValue(int(frac * self.time_slider.maximum()))
 
     def _rebuild(self, reset_camera: bool) -> None:
+        if self._closing or self.plotter is None:
+            return
         assert self.task is not None
         self.multi_traj = build_multi_trajectory(self.task, self.current_limits())
         self.plotter.clear()
@@ -254,6 +336,7 @@ class Viewer(QMainWindow):
             self.tcps[name] = TcpActor(self.plotter, name=label, ball_color=color)
         self._fill_sequence()
         self._rebuild_io_panel()
+        self._rebuild_tower_panel()
         if reset_camera and self.follow.isChecked():
             self.plotter.view_isometric()
             self.plotter.reset_camera()
@@ -293,6 +376,23 @@ class Viewer(QMainWindow):
             self.io_leds[name] = row
         self.io_layout.addStretch(1)
 
+    def _rebuild_tower_panel(self) -> None:
+        assert self.tower_panel is not None
+        while self.tower_layout.count():
+            item = self.tower_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.tower_widgets.clear()
+        if self.task is None or not self.task.tower_lights:
+            self.tower_panel.hide()
+            return
+        self.tower_panel.show()
+        for name in sorted(self.task.tower_lights):
+            widget = TowerLightStack(name, self.task.tower_lights[name])
+            self.tower_layout.addWidget(widget)
+            self.tower_widgets[name] = widget
+        self.tower_layout.addStretch(1)
+
     def _jump_to_item(self, item: QListWidgetItem) -> None:
         t0 = float(item.data(Qt.ItemDataRole.UserRole))
         if self.multi_traj is None:
@@ -320,6 +420,8 @@ class Viewer(QMainWindow):
             self.timer.stop()
 
     def _tick(self) -> None:
+        if self._closing or self.plotter is None:
+            return
         if self.multi_traj is None:
             return
         t = self._play_t0 + self._elapsed.elapsed() / 1000.0
@@ -350,7 +452,7 @@ class Viewer(QMainWindow):
         self._apply_time(self._t)
 
     def _apply_time(self, t: float) -> None:
-        if self.multi_traj is None or not self.tcps:
+        if self._closing or self.plotter is None or self.multi_traj is None or not self.tcps:
             return
         states = self.multi_traj.at_time(t)
         parts = []
@@ -368,6 +470,10 @@ class Viewer(QMainWindow):
             io_state = self.multi_traj.io_timeline.state_at(t)
             for name, row in self.io_leds.items():
                 row.set_on(io_state.get(name, False))
+        if self.multi_traj.tower_timeline is not None:
+            tower_state = self.multi_traj.tower_timeline.state_at(t)
+            for name, widget in self.tower_widgets.items():
+                widget.set_state(tower_state.get(name))
         self.plotter.render()
 
 
@@ -380,7 +486,15 @@ def main() -> None:
     path = Path(args.task) if args.task else None
     win = Viewer(path)
     win.show()
-    sys.exit(qt.exec())
+    code = qt.exec()
+    if getattr(win, "plotter", None) is not None:
+        try:
+            if not getattr(win.plotter, "_closed", True):
+                win.plotter.close()
+        except Exception:
+            pass
+        win.plotter = None
+    sys.exit(code)
 
 
 if __name__ == "__main__":

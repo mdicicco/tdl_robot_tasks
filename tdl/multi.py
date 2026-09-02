@@ -9,6 +9,7 @@ import numpy as np
 from tdl.context import SystemContext
 from tdl.schema import Limits, Task
 from tdl.signals import IoEvent, IoTimeline
+from tdl.tower import TowerTimeline
 from tdl.trajectory import Segment, Trajectory, knots_from_context, time_parameterize
 
 
@@ -18,6 +19,7 @@ class MultiTrajectory:
     duration: float
     segments: list[Segment] = field(default_factory=list)
     io_timeline: IoTimeline | None = None
+    tower_timeline: TowerTimeline | None = None
 
     @property
     def is_multi(self) -> bool:
@@ -192,11 +194,13 @@ def build_multi_trajectory(
         limits = limits_override or task.limits
         traj = time_parameterize(knots_from_context(SystemContext.from_task(task), task), limits, task.degrees, dt=dt)
         io_timeline = IoTimeline.from_task(task, [traj.io_events]) if task.io else None
+        tower_timeline = TowerTimeline.from_task(task, traj.segments)
         return MultiTrajectory(
             systems={"": traj},
             duration=traj.duration,
             segments=traj.segments,
             io_timeline=io_timeline,
+            tower_timeline=tower_timeline,
         )
 
     uncoupled: dict[str, Trajectory] = {}
@@ -221,4 +225,12 @@ def build_multi_trajectory(
             merged.append(Segment(seg.t0, seg.t1, seg.kind, prefix + seg.label))
     merged.sort(key=lambda s: s.t0)
     io_timeline = IoTimeline.from_task(task, io_event_lists) if task.io else None
-    return MultiTrajectory(systems=coupled, duration=duration, segments=merged, io_timeline=io_timeline)
+    tower_source = next(iter(uncoupled.values()))
+    tower_timeline = TowerTimeline.from_task(task, tower_source.segments)
+    return MultiTrajectory(
+        systems=coupled,
+        duration=duration,
+        segments=merged,
+        io_timeline=io_timeline,
+        tower_timeline=tower_timeline,
+    )

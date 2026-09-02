@@ -22,6 +22,7 @@ class Knot:
     linear: bool = False
     gate_ref: str | None = None
     io_commands: list[IoCommand] = field(default_factory=list)
+    tower_task: str | None = None
 
 
 @dataclass
@@ -30,6 +31,7 @@ class Segment:
     t1: float
     kind: str
     label: str
+    tower_task: str | None = None
 
 
 @dataclass
@@ -61,10 +63,11 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
     rest = task.robot.rest.tool.matrix(task.degrees)
     prefix = f"{ctx.name}:" if ctx.name else ""
     knots: list[Knot] = []
+    tt = lambda step: step.tower_task
 
     for step in steps:
         if step.kind == "rest":
-            knots.append(Knot(rest, "rest", f"{prefix}rest"))
+            knots.append(Knot(rest, "rest", f"{prefix}rest", tower_task=tt(step)))
             continue
         if step.kind == "move":
             path = task.free_space[step.ref]
@@ -74,12 +77,15 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
                         wp.matrix(task.degrees),
                         "transit",
                         f"{prefix}move:{step.ref}[{i}]",
+                        tower_task=tt(step),
                     )
                 )
             continue
         if step.kind == "keyhole":
             kh = ctx.keyholes[step.ref]
-            knots.append(Knot(kh.matrix(task.degrees), "keyhole", f"{prefix}keyhole:{step.ref}"))
+            knots.append(
+                Knot(kh.matrix(task.degrees), "keyhole", f"{prefix}keyhole:{step.ref}", tower_task=tt(step))
+            )
             continue
         if step.kind == "gate":
             gate = ctx.gates[step.ref]
@@ -90,6 +96,7 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
                     f"{prefix}gate:{step.ref}",
                     linear=True,
                     gate_ref=step.ref,
+                    tower_task=tt(step),
                 )
             )
             continue
@@ -100,7 +107,7 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
             label = f"{prefix}pause {step.hold:.2f}s"
             if step.ref:
                 label = f"{prefix}{step.ref}:pause {step.hold:.2f}s"
-            knots.append(Knot(prev.pose.copy(), "pause", label, dwell=step.hold))
+            knots.append(Knot(prev.pose.copy(), "pause", label, dwell=step.hold, tower_task=tt(step)))
             continue
         if step.kind == "io":
             if not knots:
@@ -110,9 +117,7 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
             prev = knots[-1]
             cmd = step.io_command
             label = f"{prefix}{step.ref}:io:{cmd.signal}" if step.ref else f"{prefix}io:{cmd.signal}"
-            knots.append(
-                Knot(prev.pose.copy(), "io", label, io_commands=[cmd])
-            )
+            knots.append(Knot(prev.pose.copy(), "io", label, io_commands=[cmd], tower_task=tt(step)))
             continue
         if step.kind.startswith("fp_"):
             fp = ctx.force_pushes[step.ref]
@@ -120,20 +125,24 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
             start = fp.start_pose(task.degrees)
             push_end = fp.push_end_pose(task.degrees)
             retract = fp.retract_pose(task.degrees)
+            task_tag = tt(step)
             if step.kind == "fp_approach":
-                knots.append(Knot(approach, "fp_approach", f"{prefix}approach:{step.ref}"))
+                knots.append(Knot(approach, "fp_approach", f"{prefix}approach:{step.ref}", tower_task=task_tag))
             elif step.kind == "fp_start":
-                knots.append(Knot(start, "fp_start", f"{prefix}start:{step.ref}", linear=fp.approach is not None))
+                knots.append(
+                    Knot(start, "fp_start", f"{prefix}start:{step.ref}", linear=fp.approach is not None, tower_task=task_tag)
+                )
             elif step.kind == "fp_push":
-                knots.append(Knot(push_end, "fp_push", f"{prefix}push:{step.ref}", linear=True))
+                knots.append(Knot(push_end, "fp_push", f"{prefix}push:{step.ref}", linear=True, tower_task=task_tag))
             elif step.kind == "fp_retract":
-                knots.append(Knot(retract, "fp_retract", f"{prefix}retract:{step.ref}", linear=True))
+                knots.append(Knot(retract, "fp_retract", f"{prefix}retract:{step.ref}", linear=True, tower_task=task_tag))
             continue
         loc = ctx.locations[step.ref]
         pre, tgt, post = loc.cartesian_poses(task.degrees, visit=step.visit)
         slot = loc.pattern.slot_suffix(step.visit) if loc.pattern is not None else ""
         n_pre = len(pre)
         n_post = len(post)
+        task_tag = tt(step)
         if step.kind in {"approach", "pre"}:
             if step.index >= len(pre):
                 raise IndexError(f"{step.kind} index {step.index} out of range for {step.ref!r}")
@@ -142,7 +151,7 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
             phase = "approach" if step.index == 0 else "pre"
             io_cmds = loc.io_at(phase, step.index, n_pre, n_post)
             knots.append(
-                Knot(pre[step.index], step.kind, label, linear=step.index > 0, io_commands=io_cmds)
+                Knot(pre[step.index], step.kind, label, linear=step.index > 0, io_commands=io_cmds, tower_task=task_tag)
             )
         elif step.kind == "target":
             io_cmds = loc.io_at("target", 0, n_pre, n_post)
@@ -154,6 +163,7 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
                     dwell=loc.dwell,
                     linear=len(pre) > 0,
                     io_commands=io_cmds,
+                    tower_task=task_tag,
                 )
             )
         elif step.kind in {"retract", "post"}:
@@ -163,8 +173,16 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
             label = f"retract:{step.ref}{slot}" if n == 1 else f"post:{step.ref}{slot}[{step.index}]"
             phase = "retract" if step.index == n_post - 1 else "post"
             io_cmds = loc.io_at(phase, step.index, n_pre, n_post)
-            knots.append(Knot(post[step.index], step.kind, label, linear=True, io_commands=io_cmds))
+            knots.append(Knot(post[step.index], step.kind, label, linear=True, io_commands=io_cmds, tower_task=task_tag))
     return _dedupe_adjacent(knots)
+
+
+def _segment_tower_task(a: Knot, b: Knot) -> str | None:
+    if b.kind in {"transit", "keyhole", "rest", "gate"}:
+        return None
+    if a.tower_task != b.tower_task:
+        return None
+    return b.tower_task
 
 
 def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
@@ -182,6 +200,7 @@ def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
             out[-1].kind = k.kind
             out[-1].linear = k.linear
             out[-1].io_commands = list(out[-1].io_commands) + list(k.io_commands)
+            out[-1].tower_task = k.tower_task
         else:
             out.append(k)
     return out
@@ -254,7 +273,7 @@ def time_parameterize(
             kinds.append(b.kind)
             labels.append(b.label)
         t = t0 + duration
-        segments.append(Segment(t0, t, b.kind, b.label))
+        segments.append(Segment(t0, t, b.kind, b.label, tower_task=_segment_tower_task(a, b)))
         emit_io(b.io_commands, t)
         sample_hold(b.pose, b.kind, b.label, b.dwell)
 
@@ -275,25 +294,34 @@ def time_parameterize(
             labels.append(dest.label)
         t = t0 + duration
         for i, b in enumerate(chain[1:], start=1):
+            a = chain[i - 1]
             knot_t = t0 + duration * float(knot_frac[i - 1])
             emit_io(b.io_commands, knot_t)
             segments.append(
-                Segment(knot_t, t0 + duration * float(knot_frac[i]), b.kind, b.label)
+                Segment(
+                    knot_t,
+                    t0 + duration * float(knot_frac[i]),
+                    b.kind,
+                    b.label,
+                    tower_task=_segment_tower_task(a, b),
+                )
             )
         sample_hold(chain[-1].pose, chain[-1].kind, chain[-1].label, chain[-1].dwell)
 
     i = 0
     while i < len(knots) - 1:
         if knots[i + 1].kind == "io":
-            emit_io(knots[i + 1].io_commands, t)
-            segments.append(Segment(t, t, "io", knots[i + 1].label))
+            k = knots[i + 1]
+            emit_io(k.io_commands, t)
+            segments.append(Segment(t, t, "io", k.label, tower_task=k.tower_task))
             i += 1
             continue
         if knots[i + 1].kind == "pause":
             t0 = t
-            sample_hold(knots[i].pose, "pause", knots[i + 1].label, knots[i + 1].dwell)
+            k = knots[i + 1]
+            sample_hold(knots[i].pose, "pause", k.label, k.dwell)
             if t > t0:
-                segments.append(Segment(t0, t, "pause", knots[i + 1].label))
+                segments.append(Segment(t0, t, "pause", k.label, tower_task=k.tower_task))
             i += 1
             continue
         if knots[i + 1].linear:

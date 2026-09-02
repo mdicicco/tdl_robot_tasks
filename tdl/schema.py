@@ -205,6 +205,34 @@ class IoCommand(BaseModel):
         return False
 
 
+class TowerLightState(BaseModel):
+    """Named color slot on a tower light stack."""
+
+    name: str
+    color: str
+
+
+class TowerLight(BaseModel):
+    """Stack light with indexed states mapped to named sub-tasks."""
+
+    description: str = ""
+    states: list[TowerLightState] = Field(min_length=1)
+    tasks: dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_states(self) -> TowerLight:
+        n = len(self.states)
+        for task, idx in self.tasks.items():
+            if not 0 <= idx < n:
+                raise ValueError(f"tower light task {task!r} index {idx} out of range")
+        return self
+
+    def state_for_task(self, task: str | None) -> int | None:
+        if task is None:
+            return None
+        return self.tasks.get(task)
+
+
 class Location(BaseModel):
     description: str = ""
     target: Frame
@@ -440,6 +468,7 @@ class Step(BaseModel):
     hold: float = 0.0
     gate_ref: str | None = None
     io_command: IoCommand | None = None
+    tower_task: str | None = None
 
 
 class Task(BaseModel):
@@ -452,6 +481,7 @@ class Task(BaseModel):
     limits: Limits = Field(default_factory=Limits)
     locations: dict[str, Location] = Field(default_factory=dict)
     io: dict[str, IoSignal] = Field(default_factory=dict)
+    tower_lights: dict[str, TowerLight] = Field(default_factory=dict)
     force_pushes: dict[str, ForcePush] = Field(default_factory=dict)
     keyholes: dict[str, Keyhole] = Field(default_factory=dict)
     sensors: dict[str, Sensor] = Field(default_factory=dict)
@@ -469,6 +499,7 @@ class Task(BaseModel):
         pools = {
             "location": set(self.locations),
             "io": set(self.io),
+            "tower_light": set(self.tower_lights),
             "force_push": set(self.force_pushes),
             "keyhole": set(self.keyholes),
             "sensor": set(self.sensors),
@@ -499,6 +530,13 @@ class Task(BaseModel):
                 for cmd in _io_commands_in_sequence(fp.sequence):
                     if cmd.signal not in self.io:
                         raise ValueError(f"Unknown io signal {cmd.signal!r}")
+        known_tasks = set(self.locations) | set(self.force_pushes)
+        for spec in self.systems.values():
+            known_tasks |= set(spec.locations) | set(spec.force_pushes)
+        for light in self.tower_lights.values():
+            for task in light.tasks:
+                if task not in known_tasks:
+                    raise ValueError(f"Unknown tower light task {task!r}")
         return self
 
 

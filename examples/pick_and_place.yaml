@@ -32,6 +32,20 @@ io:
     description: Punch press motor enable
     initial: false
 
+tower_lights:
+  cell:
+    description: Cell status stack light
+    states:
+      - { name: pick, color: "#29B6F6" }
+      - { name: tend, color: "#FFA726" }
+      - { name: punch, color: "#EF5350" }
+      - { name: place, color: "#66BB6A" }
+    tasks:
+      pickup: 0
+      process: 1
+      punch: 2
+      dropoff: 3
+
 locations:
   pickup:
     description: Pick tray at 12 o'clock (top of the work circle)

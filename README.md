@@ -60,6 +60,7 @@ A **force push** moves to a start pose (with optional approach), then pushes alo
 - **approach** — optional pre-stroke (same spec as locations)
 - **push** — `axis` or `azimuth` / `elevation`, plus `max_travel` and `force_limit` (Newtons)
 - **retract** — stroke leaving the contact point
+- **sequence** — optional ordered sub-steps: `approach`, `start`, `push`, `retract`, plus `{pause: ...}` and `{io: ...}` (same as locations). Default is approach (if any), start, push, retract.
 
 The viewer currently travels the full `max_travel` distance (no force feedback yet). A real controller would stop early when resistance exceeds `force_limit`.
 
@@ -67,7 +68,7 @@ A **sensor** is a sphere (`xyz` + `radius`) tied to a `gate`. It reads **true** 
 
 **systems** run in parallel in the viewer. Each has its own `locations`, optional `limits`, and `sequence`. See `examples/gated_dual_pick_place.yaml` for a two-line handshake demo.
 
-**io** defines named digital outputs (`initial: true/false`). Attach `{io: ...}` steps inside a location **sequence**, or use legacy `io:` with `at:` on the location. The viewer shows a simulated LED per signal (dull off, bright green on).
+**io** defines named digital outputs (`initial: true/false`). Attach `{io: ...}` steps inside a location or force-push **sequence**. Use quoted `"on"` / `"off"` for discrete sets in YAML (`on` and `off` parse as booleans). The viewer shows a simulated LED per signal (dull off, bright green on).
 
 Sequence steps:
 

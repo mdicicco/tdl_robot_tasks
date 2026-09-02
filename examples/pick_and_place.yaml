@@ -28,6 +28,9 @@ io:
   machine_cycle:
     description: Tending machine cycle start
     initial: false
+  punch_press:
+    description: Punch press motor enable
+    initial: false
 
 locations:
   pickup:
@@ -117,6 +120,17 @@ force_pushes:
     retract:
       axis: [0.0, 0.0, -1.0]
       distance: 0.12
+    sequence:
+      - approach
+      - io:
+          signal: punch_press
+          set: "on"
+      - start
+      - push
+      - retract
+      - io:
+          signal: punch_press
+          set: "off"
 
 # Named via poses. Listed between two locations, free-space goto passes through them.
 keyholes:

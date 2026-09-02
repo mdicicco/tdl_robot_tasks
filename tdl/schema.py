@@ -324,6 +324,7 @@ class ForcePush(BaseModel):
     approach: ApproachSpec | None = None
     push: PushSpec
     retract: ApproachSpec = Field(default_factory=ApproachSpec)
+    sequence: list[Any] | None = None
 
     def start_pose(self, degrees: bool) -> np.ndarray:
         return self.target.matrix(degrees)
@@ -491,6 +492,13 @@ class Task(BaseModel):
             for cmd in io_cmds:
                 if cmd.signal not in self.io:
                     raise ValueError(f"Unknown io signal {cmd.signal!r}")
+        for fp in list(self.force_pushes.values()) + [
+            fp for spec in self.systems.values() for fp in spec.force_pushes.values()
+        ]:
+            if fp.sequence:
+                for cmd in _io_commands_in_sequence(fp.sequence):
+                    if cmd.signal not in self.io:
+                        raise ValueError(f"Unknown io signal {cmd.signal!r}")
         return self
 
 

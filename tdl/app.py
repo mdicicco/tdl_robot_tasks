@@ -208,6 +208,7 @@ class Viewer(QMainWindow):
         self.task = load_task(path)
         self.file_label.setText(path.name)
         self.name_label.setText(self.task.name)
+        self.setWindowTitle(f"{self.task.name} — Task Definition Language")
         joints = ", ".join(f"{j:g}" for j in self.task.robot.rest.joints)
         unit = "deg" if self.task.degrees else "rad"
         self.joints_label.setText(f"rest joints ({unit}): [{joints}]")

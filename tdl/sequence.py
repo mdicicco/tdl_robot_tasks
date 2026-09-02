@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from tdl.context import SystemContext
-from tdl.schema import IoCommand, Location, RepeatBlock, Step, Task
+from tdl.schema import ForcePush, IoCommand, Location, RepeatBlock, Step, Task
 
 _KINDS = ("move", "approach", "target", "retract", "keyhole", "location", "pre", "post", "gate")
 
@@ -100,6 +100,52 @@ def parse_location_item(raw: Any, loc_name: str, visit: int, loc: Location) -> S
     raise ValueError(f"Unrecognized location sequence item {raw!r} for {loc_name!r}")
 
 
+def parse_force_push_item(raw: Any, name: str, fp: ForcePush) -> Step:
+    if isinstance(raw, str):
+        if raw == "approach":
+            if fp.approach is None:
+                raise ValueError(f"force push {name!r} has no approach stroke")
+            return Step(kind="fp_approach", ref=name)
+        if raw == "start":
+            return Step(kind="fp_start", ref=name)
+        if raw == "push":
+            return Step(kind="fp_push", ref=name)
+        if raw == "retract":
+            return Step(kind="fp_retract", ref=name)
+        raise ValueError(f"Unrecognized force push sequence item {raw!r} for {name!r}")
+    if not isinstance(raw, dict):
+        raise ValueError(f"Force push sequence item must be a string or mapping, got {type(raw)}")
+    if "pause" in raw:
+        step = _parse_pause(raw["pause"])
+        return Step(kind="pause", hold=step.hold, ref=name)
+    if "io" in raw:
+        return Step(kind="io", ref=name, io_command=_parse_io(raw["io"]))
+    if "approach" in raw:
+        if fp.approach is None:
+            raise ValueError(f"force push {name!r} has no approach stroke")
+        return Step(kind="fp_approach", ref=name)
+    if "start" in raw:
+        return Step(kind="fp_start", ref=name)
+    if "push" in raw:
+        return Step(kind="fp_push", ref=name)
+    if "retract" in raw:
+        return Step(kind="fp_retract", ref=name)
+    raise ValueError(f"Unrecognized force push sequence item {raw!r} for {name!r}")
+
+
+def _expand_force_push(name: str, fp: ForcePush) -> list[Step]:
+    if fp.sequence is not None:
+        return [parse_force_push_item(raw, name, fp) for raw in fp.sequence]
+
+    steps: list[Step] = []
+    if fp.approach is not None:
+        steps.append(Step(kind="fp_approach", ref=name))
+    steps.append(Step(kind="fp_start", ref=name))
+    steps.append(Step(kind="fp_push", ref=name))
+    steps.append(Step(kind="fp_retract", ref=name))
+    return steps
+
+
 def expand_sequence(task: Task, ctx: SystemContext | None = None) -> list[Step]:
     ctx = ctx or SystemContext.from_task(task)
     visits: dict[str, int] = {}
@@ -157,14 +203,7 @@ def _resolve_name(name: str, task: Task, ctx: SystemContext, visits: dict[str, i
         visits[name] = visit + 1
         return _expand_location(name, loc, visit)
     if name in ctx.force_pushes:
-        fp = ctx.force_pushes[name]
-        steps: list[Step] = []
-        if fp.approach is not None:
-            steps.append(Step(kind="fp_approach", ref=name))
-        steps.append(Step(kind="fp_start", ref=name))
-        steps.append(Step(kind="fp_push", ref=name))
-        steps.append(Step(kind="fp_retract", ref=name))
-        return steps
+        return _expand_force_push(name, ctx.force_pushes[name])
     if name in ctx.keyholes:
         return [Step(kind="keyhole", ref=name)]
     raise KeyError(

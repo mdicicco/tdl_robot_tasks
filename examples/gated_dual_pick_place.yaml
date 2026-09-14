@@ -21,6 +21,14 @@ limits:
   angular: 90.0
   approach_linear: 0.08
 
+grippers:
+  gripper_a:
+    description: Line A gripper
+    initial: open
+  gripper_b:
+    description: Line B gripper
+    initial: open
+
 # Presence sensors at each line's wait pose. Active while that gate is held.
 sensors:
   presence_at_a:
@@ -39,12 +47,16 @@ sensors:
 gates:
   wait_a:
     description: Line A handshake point
+    tool:
+      name: tool1
     pose:
       xyz: [-0.35, 0.00, 0.30]
       rpy: [180.0, 0.0, 0.0]
     until: presence_at_b
   wait_b:
     description: Line B handshake point
+    tool:
+      name: tool1
     pose:
       xyz: [0.35, 0.00, 0.30]
       rpy: [180.0, 0.0, 0.0]
@@ -59,6 +71,8 @@ systems:
       approach_linear: 0.10
     locations:
       pickup:
+        tool:
+          name: tool1
         target:
           xyz: [-0.35, 0.28, 0.04]
           rpy: [180.0, 0.0, 0.0]
@@ -69,7 +83,16 @@ systems:
           axis: [0.0, 0.0, -1.0]
           distance: 0.10
         dwell: 0.20
+        sequence:
+          - approach
+          - target
+          - gripper:
+              name: gripper_a
+              set: closed
+          - retract
       dropoff:
+        tool:
+          name: tool1
         target:
           xyz: [-0.35, -0.28, 0.04]
           rpy: [180.0, 0.0, 0.0]
@@ -80,6 +103,13 @@ systems:
           axis: [0.0, 0.0, -1.0]
           distance: 0.10
         dwell: 0.20
+        sequence:
+          - approach
+          - target
+          - gripper:
+              name: gripper_a
+              set: open
+          - retract
     sequence:
       - rest
       - pickup
@@ -95,6 +125,8 @@ systems:
       approach_linear: 0.06
     locations:
       pickup:
+        tool:
+          name: tool1
         target:
           xyz: [0.35, 0.32, 0.04]
           rpy: [180.0, 0.0, 0.0]
@@ -105,7 +137,16 @@ systems:
           axis: [0.0, 0.0, -1.0]
           distance: 0.18
         dwell: 0.30
+        sequence:
+          - approach
+          - target
+          - gripper:
+              name: gripper_b
+              set: closed
+          - retract
       dropoff:
+        tool:
+          name: tool1
         target:
           xyz: [0.35, -0.32, 0.04]
           rpy: [180.0, 0.0, 0.0]
@@ -116,6 +157,13 @@ systems:
           axis: [0.0, 0.0, -1.0]
           distance: 0.18
         dwell: 0.30
+        sequence:
+          - approach
+          - target
+          - gripper:
+              name: gripper_b
+              set: open
+          - retract
     sequence:
       - rest
       - pickup

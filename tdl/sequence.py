@@ -5,7 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 from tdl.context import SystemContext
-from tdl.schema import ForcePush, IoCommand, Location, RepeatBlock, Step, Task
+from tdl.schema import (
+    ForcePush,
+    GrindPath,
+    GripperCommand,
+    IoCommand,
+    Location,
+    RepeatBlock,
+    Step,
+    Task,
+    _parse_gripper_command,
+)
 
 
 def _tag_tower(steps: list[Step], task_name: str | None) -> list[Step]:
@@ -86,6 +96,13 @@ def parse_location_item(raw: Any, loc_name: str, visit: int, loc: Location) -> S
         return Step(kind="pause", hold=step.hold, ref=loc_name, visit=visit)
     if "io" in raw:
         return Step(kind="io", ref=loc_name, visit=visit, io_command=_parse_io(raw["io"]))
+    if "gripper" in raw:
+        return Step(
+            kind="gripper",
+            ref=loc_name,
+            visit=visit,
+            gripper_command=_parse_gripper_command(raw["gripper"]),
+        )
     if "approach" in raw:
         return Step(kind="approach", ref=loc_name, index=0, visit=visit)
     if "target" in raw:
@@ -124,6 +141,8 @@ def parse_force_push_item(raw: Any, name: str, fp: ForcePush) -> Step:
         return Step(kind="pause", hold=step.hold, ref=name)
     if "io" in raw:
         return Step(kind="io", ref=name, io_command=_parse_io(raw["io"]))
+    if "gripper" in raw:
+        return Step(kind="gripper", ref=name, gripper_command=_parse_gripper_command(raw["gripper"]))
     if "approach" in raw:
         if fp.approach is None:
             raise ValueError(f"force push {name!r} has no approach stroke")
@@ -150,10 +169,85 @@ def _expand_force_push(name: str, fp: ForcePush) -> list[Step]:
     return steps
 
 
+def parse_grind_path_item(raw: Any, name: str, gp: GrindPath) -> list[Step]:
+    if isinstance(raw, str):
+        if raw == "approach":
+            if gp.approach is None:
+                raise ValueError(f"grind path {name!r} has no approach stroke")
+            return [Step(kind="gp_approach", ref=name)]
+        if raw == "start":
+            return [Step(kind="gp_start", ref=name)]
+        if raw == "path":
+            return [Step(kind="gp_path", ref=name, index=i) for i in range(1, len(gp.points))]
+        if raw == "retract":
+            return [Step(kind="gp_retract", ref=name)]
+        raise ValueError(f"Unrecognized grind path sequence item {raw!r} for {name!r}")
+    if not isinstance(raw, dict):
+        raise ValueError(f"Grind path sequence item must be a string or mapping, got {type(raw)}")
+    if "pause" in raw:
+        step = _parse_pause(raw["pause"])
+        return [Step(kind="pause", hold=step.hold, ref=name)]
+    if "io" in raw:
+        return [Step(kind="io", ref=name, io_command=_parse_io(raw["io"]))]
+    if "gripper" in raw:
+        return [Step(kind="gripper", ref=name, gripper_command=_parse_gripper_command(raw["gripper"]))]
+    if "approach" in raw:
+        if gp.approach is None:
+            raise ValueError(f"grind path {name!r} has no approach stroke")
+        return [Step(kind="gp_approach", ref=name)]
+    if "start" in raw:
+        return [Step(kind="gp_start", ref=name)]
+    if "path" in raw:
+        val = raw["path"]
+        if val is True or val == name:
+            return [Step(kind="gp_path", ref=name, index=i) for i in range(1, len(gp.points))]
+        index = int(val)
+        if not 0 <= index < len(gp.points):
+            raise IndexError(f"path index {index} out of range for {name!r}")
+        kind = "gp_start" if index == 0 else "gp_path"
+        return [Step(kind=kind, ref=name, index=index)]
+    if "retract" in raw:
+        return [Step(kind="gp_retract", ref=name)]
+    raise ValueError(f"Unrecognized grind path sequence item {raw!r} for {name!r}")
+
+
+def _expand_grind_path(name: str, gp: GrindPath) -> list[Step]:
+    if gp.sequence is not None:
+        steps: list[Step] = []
+        for raw in gp.sequence:
+            steps.extend(parse_grind_path_item(raw, name, gp))
+        return steps
+
+    steps: list[Step] = []
+    if gp.approach is not None:
+        steps.append(Step(kind="gp_approach", ref=name))
+    steps.append(Step(kind="gp_start", ref=name, index=0))
+    for i in range(1, len(gp.points)):
+        steps.append(Step(kind="gp_path", ref=name, index=i))
+    steps.append(Step(kind="gp_retract", ref=name))
+    return steps
+
+
 def expand_sequence(task: Task, ctx: SystemContext | None = None) -> list[Step]:
     ctx = ctx or SystemContext.from_task(task)
     visits: dict[str, int] = {}
-    return _expand_list(ctx.sequence, task, ctx, visits)
+    steps = _expand_list(ctx.sequence, task, ctx, visits)
+    _bind_gripper_names(steps, task)
+    return steps
+
+
+def _bind_gripper_names(steps: list[Step], task: Task) -> None:
+    default = next(iter(task.grippers)) if len(task.grippers) == 1 else None
+    for step in steps:
+        if step.kind != "gripper" or step.gripper_command is None:
+            continue
+        cmd = step.gripper_command
+        if cmd.name is None:
+            if default is None:
+                raise ValueError("gripper command needs name when more than one gripper is defined")
+            step.gripper_command = cmd.model_copy(update={"name": default})
+        elif cmd.name not in task.grippers:
+            raise KeyError(f"Unknown gripper {cmd.name!r}")
 
 
 def _expand_list(items: list[Any], task: Task, ctx: SystemContext, visits: dict[str, int]) -> list[Step]:
@@ -208,10 +302,12 @@ def _resolve_name(name: str, task: Task, ctx: SystemContext, visits: dict[str, i
         return _tag_tower(_expand_location(name, loc, visit), name)
     if name in ctx.force_pushes:
         return _tag_tower(_expand_force_push(name, ctx.force_pushes[name]), name)
+    if name in ctx.grind_paths:
+        return _tag_tower(_expand_grind_path(name, ctx.grind_paths[name]), name)
     if name in ctx.keyholes:
         return [Step(kind="keyhole", ref=name)]
     raise KeyError(
-        f"Unknown sequence name {name!r} (not a location, force push, or keyhole)"
+        f"Unknown sequence name {name!r} (not a location, force push, grind path, or keyhole)"
     )
 
 
@@ -224,6 +320,17 @@ def _validate_step(step: Step, task: Task, ctx: SystemContext) -> None:
         if step.io_command.signal not in task.io:
             raise KeyError(f"Unknown io signal {step.io_command.signal!r}")
         return
+    if step.kind == "gripper":
+        if step.gripper_command is None:
+            raise ValueError("gripper step missing command")
+        cmd = step.gripper_command
+        if cmd.name is None:
+            if len(task.grippers) != 1:
+                raise ValueError("gripper command needs name when more than one gripper is defined")
+            step.gripper_command = cmd.model_copy(update={"name": next(iter(task.grippers))})
+        elif cmd.name not in task.grippers:
+            raise KeyError(f"Unknown gripper {cmd.name!r}")
+        return
     if step.kind == "gate":
         if step.ref not in ctx.gates:
             raise KeyError(f"Unknown gate {step.ref!r}")
@@ -234,6 +341,10 @@ def _validate_step(step: Step, task: Task, ctx: SystemContext) -> None:
     if step.kind.startswith("fp_"):
         if step.ref not in ctx.force_pushes:
             raise KeyError(f"Unknown force push {step.ref!r}")
+        return
+    if step.kind.startswith("gp_"):
+        if step.ref not in ctx.grind_paths:
+            raise KeyError(f"Unknown grind path {step.ref!r}")
         return
     if step.kind == "move":
         if step.ref not in task.free_space:

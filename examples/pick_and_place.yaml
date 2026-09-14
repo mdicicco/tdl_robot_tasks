@@ -2,7 +2,7 @@
 # Frames are tool poses in the world. Lengths in meters, angles in degrees.
 #
 # Stations on a circle (radius 0.35 m) around the origin, like a clock face:
-#   12  pickup    3  process    6  punch    9  dropoff
+#   12  pickup    3  process    ~4:30 grind    6  punch    9  dropoff
 # Rest pose is at the center.
 
 version: 1
@@ -32,23 +32,32 @@ io:
     description: Punch press motor enable
     initial: false
 
+grippers:
+  gripper:
+    description: Carried part gripper
+    initial: open
+
 tower_lights:
   cell:
     description: Cell status stack light
     states:
       - { name: pick, color: "#29B6F6" }
       - { name: tend, color: "#FFA726" }
+      - { name: grind, color: "#BA68C8" }
       - { name: punch, color: "#EF5350" }
       - { name: place, color: "#66BB6A" }
     tasks:
       pickup: 0
       process: 1
-      punch: 2
-      dropoff: 3
+      grind: 2
+      punch: 3
+      dropoff: 4
 
 locations:
   pickup:
     description: Pick tray at 12 o'clock (top of the work circle)
+    tool:
+      name: tool1
     target:
       xyz: [0.00, 0.35, 0.04]
       rpy: [180.0, 0.0, 0.0]
@@ -70,9 +79,16 @@ locations:
         counts: [3, 2]          # 3 along target X, 2 along target Y; X varies fastest
         step: [0.06, 0.05, 0.0]
     dwell: 0.35
+    sequence:
+      - approach
+      - target
+      - gripper: close
+      - retract
 
   dropoff:
     description: Place into a bin at 9 o'clock (vertical down)
+    tool:
+      name: tool1
     target:
       xyz: [-0.35, 0.00, 0.04]
       rpy: [180.0, 0.0, 0.0]
@@ -88,9 +104,16 @@ locations:
       axis: [0.0, 0.0, -1.0] # straight up along world +Z
       distance: 0.12
     dwell: 0.25
+    sequence:
+      - approach
+      - target
+      - gripper: open
+      - retract
 
   process:
     description: Machine tending at 3 o'clock (insert away from center)
+    tool:
+      name: tool1
     target:
       xyz: [0.35, 0.00, 0.13]
       rpy: [90.0, 0.0, 90.0]   # tool Z toward +X (away from origin)
@@ -117,9 +140,48 @@ locations:
       - post: 0
       - post: 1
 
+grind_paths:
+  grind:
+    description: Sanding figure-8 between process (3) and punch (6)
+    tool:
+      name: tool1
+    target:
+      xyz: [0.25, -0.25, 0.05]
+      rpy: [180.0, 0.0, 0.0]
+    approach:
+      elevation: -90.0
+      distance: 0.10
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.10
+    # 20 points of a figure-8 in the target XY plane (x = a sin t, y = a/2 sin 2t)
+    points:
+      - [ 0.0000,  0.0000, 0.0000]
+      - [ 0.0155,  0.0147, 0.0000]
+      - [ 0.0294,  0.0238, 0.0000]
+      - [ 0.0405,  0.0238, 0.0000]
+      - [ 0.0476,  0.0147, 0.0000]
+      - [ 0.0500,  0.0000, 0.0000]
+      - [ 0.0476, -0.0147, 0.0000]
+      - [ 0.0405, -0.0238, 0.0000]
+      - [ 0.0294, -0.0238, 0.0000]
+      - [ 0.0155, -0.0147, 0.0000]
+      - [ 0.0000,  0.0000, 0.0000]
+      - [-0.0155,  0.0147, 0.0000]
+      - [-0.0294,  0.0238, 0.0000]
+      - [-0.0405,  0.0238, 0.0000]
+      - [-0.0476,  0.0147, 0.0000]
+      - [-0.0500,  0.0000, 0.0000]
+      - [-0.0476, -0.0147, 0.0000]
+      - [-0.0405, -0.0238, 0.0000]
+      - [-0.0294, -0.0238, 0.0000]
+      - [-0.0155, -0.0147, 0.0000]
+
 force_pushes:
   punch:
     description: Force punch at 6 o'clock (bottom of the work circle)
+    tool:
+      name: tool1
     target:
       xyz: [0.00, -0.35, 0.13]
       rpy: [180.0, 0.0, 0.0]
@@ -150,6 +212,8 @@ force_pushes:
 keyholes:
   over_fixture:
     description: Arc between pickup (12) and process (3)
+    tool:
+      name: tool1
     xyz: [0.22, 0.22, 0.36]
     rpy: [180.0, 0.0, 45.0]
     radius: 0.055
@@ -162,6 +226,7 @@ sequence:
         - pickup
         - keyhole: over_fixture
         - process
+        - grind
         - punch
         - dropoff
         - rest

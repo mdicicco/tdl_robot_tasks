@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tdl.schema import ForcePush, Gate, Keyhole, Location, Task
+from tdl.schema import ForcePush, Gate, GrindPath, Keyhole, Location, Task
 
 
 @dataclass
@@ -12,6 +12,7 @@ class SystemContext:
     name: str | None
     locations: dict[str, Location]
     force_pushes: dict[str, ForcePush]
+    grind_paths: dict[str, GrindPath]
     keyholes: dict[str, Keyhole]
     gates: dict[str, Gate]
     sequence: list
@@ -24,6 +25,7 @@ class SystemContext:
                 name=system_name,
                 locations=spec.locations,
                 force_pushes=spec.force_pushes,
+                grind_paths=spec.grind_paths,
                 keyholes=spec.keyholes,
                 gates=task.gates,
                 sequence=spec.sequence,
@@ -32,6 +34,7 @@ class SystemContext:
             name=None,
             locations=task.locations,
             force_pushes=task.force_pushes,
+            grind_paths=task.grind_paths,
             keyholes=task.keyholes,
             gates=task.gates,
             sequence=task.sequence,

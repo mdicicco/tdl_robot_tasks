@@ -8,6 +8,7 @@ import numpy as np
 
 from tdl.context import SystemContext
 from tdl.schema import Limits, Task
+from tdl.gripper import GripperEvent, GripperTimeline
 from tdl.signals import IoEvent, IoTimeline
 from tdl.tower import TowerTimeline
 from tdl.trajectory import Segment, Trajectory, knots_from_context, time_parameterize
@@ -20,6 +21,7 @@ class MultiTrajectory:
     segments: list[Segment] = field(default_factory=list)
     io_timeline: IoTimeline | None = None
     tower_timeline: TowerTimeline | None = None
+    gripper_timeline: GripperTimeline | None = None
 
     @property
     def is_multi(self) -> bool:
@@ -60,7 +62,7 @@ def _simulate_gated(
     task: Task,
     uncoupled: dict[str, Trajectory],
     dt: float,
-) -> tuple[dict[str, Trajectory], list[IoEvent]]:
+) -> tuple[dict[str, Trajectory], list[IoEvent], list[GripperEvent]]:
     names = list(uncoupled)
     gate_arrivals = {n: _gate_arrival(uncoupled[n]) for n in names}
     released = {n: gate_arrivals[n][0] is None for n in names}
@@ -73,7 +75,11 @@ def _simulate_gated(
     pending_io: dict[str, list[IoEvent]] = {
         n: sorted(uncoupled[n].io_events, key=lambda e: e.time) for n in names
     }
+    pending_gripper: dict[str, list[GripperEvent]] = {
+        n: sorted(uncoupled[n].gripper_events, key=lambda e: e.time) for n in names
+    }
     io_merged: list[IoEvent] = []
+    gripper_merged: list[GripperEvent] = []
     times: dict[str, list[float]] = {n: [] for n in names}
     poses: dict[str, list[np.ndarray]] = {n: [] for n in names}
     kinds: dict[str, list[str]] = {n: [] for n in names}
@@ -84,6 +90,10 @@ def _simulate_gated(
         while queue and local_t[n] >= queue[0].time - 1e-9:
             ev = queue.pop(0)
             io_merged.append(IoEvent(global_t, ev.signal, ev.on))
+        gqueue = pending_gripper[n]
+        while gqueue and local_t[n] >= gqueue[0].time - 1e-9:
+            ev = gqueue.pop(0)
+            gripper_merged.append(GripperEvent(global_t, ev.gripper, ev.closed))
 
     global_t = 0.0
     max_t = max(traj.duration for traj in uncoupled.values()) + 120.0
@@ -165,7 +175,7 @@ def _simulate_gated(
             segments=segs,
             duration=float(times[n][-1]) if times[n] else 0.0,
         )
-    return out, io_merged
+    return out, io_merged, gripper_merged
 
 
 def _segments_from_samples(times: list[float], kinds: list[str], labels: list[str]) -> list[Segment]:
@@ -195,12 +205,14 @@ def build_multi_trajectory(
         traj = time_parameterize(knots_from_context(SystemContext.from_task(task), task), limits, task.degrees, dt=dt)
         io_timeline = IoTimeline.from_task(task, [traj.io_events]) if task.io else None
         tower_timeline = TowerTimeline.from_task(task, traj.segments)
+        gripper_timeline = GripperTimeline.from_task(task, [traj.gripper_events])
         return MultiTrajectory(
             systems={"": traj},
             duration=traj.duration,
             segments=traj.segments,
             io_timeline=io_timeline,
             tower_timeline=tower_timeline,
+            gripper_timeline=gripper_timeline,
         )
 
     uncoupled: dict[str, Trajectory] = {}
@@ -210,12 +222,15 @@ def build_multi_trajectory(
         uncoupled[name] = time_parameterize(knots_from_context(ctx, task), limits, task.degrees, dt=dt)
 
     io_event_lists: list[list[IoEvent]] = []
+    gripper_event_lists: list[list[GripperEvent]] = []
     if task.gates and task.sensors:
-        coupled, io_merged = _simulate_gated(task, uncoupled, dt=dt)
+        coupled, io_merged, gripper_merged = _simulate_gated(task, uncoupled, dt=dt)
         io_event_lists = [io_merged]
+        gripper_event_lists = [gripper_merged]
     else:
         coupled = uncoupled
         io_event_lists = [traj.io_events for traj in uncoupled.values()]
+        gripper_event_lists = [traj.gripper_events for traj in uncoupled.values()]
 
     duration = max(traj.duration for traj in coupled.values())
     merged: list[Segment] = []
@@ -227,10 +242,12 @@ def build_multi_trajectory(
     io_timeline = IoTimeline.from_task(task, io_event_lists) if task.io else None
     tower_source = next(iter(uncoupled.values()))
     tower_timeline = TowerTimeline.from_task(task, tower_source.segments)
+    gripper_timeline = GripperTimeline.from_task(task, gripper_event_lists)
     return MultiTrajectory(
         systems=coupled,
         duration=duration,
         segments=merged,
         io_timeline=io_timeline,
         tower_timeline=tower_timeline,
+        gripper_timeline=gripper_timeline,
     )

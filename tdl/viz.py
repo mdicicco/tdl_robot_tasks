@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pyvista as pv
 
-from tdl.schema import ForcePush, Gate, Keyhole, Location, SearchArea, Sensor, Task
+from tdl.schema import ForcePush, Gate, GrindPath, Keyhole, Location, SearchArea, Sensor, Task
 from tdl.trajectory import Trajectory
 
 try:
@@ -30,10 +30,15 @@ KIND_COLORS = {
     "retract": "#AB47BC",
     "pause": "#80CBC4",
     "io": "#AED581",
+    "gripper": "#FFCC80",
     "fp_approach": "#FFA726",
     "fp_start": "#66BB6A",
     "fp_push": "#EF5350",
     "fp_retract": "#AB47BC",
+    "gp_approach": "#FFA726",
+    "gp_start": "#66BB6A",
+    "gp_path": "#BA68C8",
+    "gp_retract": "#AB47BC",
     "gate": "#FFD54F",
     "idle": "#BDBDBD",
 }
@@ -216,6 +221,43 @@ def add_force_push(plotter: pv.Plotter, name: str, fp: ForcePush, degrees: bool)
     )
 
 
+def add_grind_path(plotter: pv.Plotter, name: str, gp: GrindPath, degrees: bool) -> None:
+    poses = gp.path_poses(degrees)
+    pts = np.stack([T[:3, 3] for T in poses])
+    add_frame(plotter, poses[0], scale=0.06, name=f"gp-start-{name}")
+    if gp.approach is not None:
+        add_frame(plotter, gp.approach_pose(degrees), scale=0.05, name=f"gp-approach-{name}", opacity=0.75)
+    add_frame(plotter, gp.retract_pose(degrees), scale=0.05, name=f"gp-retract-{name}", opacity=0.8)
+    if len(pts) >= 2:
+        line = pv.lines_from_points(pts)
+        plotter.add_mesh(
+            line.tube(radius=0.0025),
+            color=KIND_COLORS["gp_path"],
+            name=f"gp-path-{name}",
+            reset_camera=False,
+            smooth_shading=True,
+        )
+    plotter.add_mesh(
+        pv.PolyData(pts),
+        color=KIND_COLORS["gp_path"],
+        point_size=8,
+        render_points_as_spheres=True,
+        name=f"gp-pts-{name}",
+        reset_camera=False,
+    )
+    label_pt = poses[0][:3, 3] + np.array([0.0, 0.0, 0.08])
+    plotter.add_point_labels(
+        [label_pt],
+        [f"{name}\n{len(poses)} pts"],
+        font_size=12,
+        name=f"label-gp-{name}",
+        text_color=KIND_COLORS["gp_path"],
+        shape_opacity=0.35,
+        reset_camera=False,
+        always_visible=True,
+    )
+
+
 def add_sensor(plotter: pv.Plotter, name: str, sensor: Sensor) -> None:
     center = np.asarray(sensor.xyz, dtype=float)
     sphere = pv.Sphere(radius=float(sensor.radius), center=center, theta_resolution=20, phi_resolution=16)
@@ -295,7 +337,7 @@ def add_path(plotter: pv.Plotter, traj: Trajectory, path_id: str = "") -> None:
     for i, seg in enumerate(traj.segments):
         mask = (traj.t >= seg.t0 - 1e-9) & (traj.t <= seg.t1 + 1e-9)
         pts = traj.poses[mask, :3, 3]
-        if len(pts) < 2 or seg.kind in {"pause", "gate"}:
+        if len(pts) < 2 or seg.kind in {"pause", "gate", "io", "gripper"}:
             continue
         line = pv.lines_from_points(pts)
         plotter.add_mesh(
@@ -316,6 +358,8 @@ def add_static_scene(plotter: pv.Plotter, task: Task, traj: Trajectory | MultiTr
                 add_location(plotter, f"{sys_name}/{loc_name}", loc, task.degrees)
             for fp_name, fp in spec.force_pushes.items():
                 add_force_push(plotter, f"{sys_name}/{fp_name}", fp, task.degrees)
+            for gp_name, gp in spec.grind_paths.items():
+                add_grind_path(plotter, f"{sys_name}/{gp_name}", gp, task.degrees)
             for kh_name, kh in spec.keyholes.items():
                 add_keyhole(plotter, f"{sys_name}/{kh_name}", kh, task.degrees)
     else:
@@ -323,6 +367,8 @@ def add_static_scene(plotter: pv.Plotter, task: Task, traj: Trajectory | MultiTr
             add_location(plotter, name, loc, task.degrees)
         for name, fp in task.force_pushes.items():
             add_force_push(plotter, name, fp, task.degrees)
+        for name, gp in task.grind_paths.items():
+            add_grind_path(plotter, name, gp, task.degrees)
         for name, kh in task.keyholes.items():
             add_keyhole(plotter, name, kh, task.degrees)
     for name, sensor in task.sensors.items():
@@ -341,6 +387,7 @@ def add_static_scene(plotter: pv.Plotter, task: Task, traj: Trajectory | MultiTr
             ("approach", KIND_COLORS["approach"]),
             ("target", KIND_COLORS["target"]),
             ("force push", KIND_COLORS["fp_push"]),
+            ("grind", KIND_COLORS["gp_path"]),
             ("gate", KIND_COLORS["gate"]),
             ("retract", KIND_COLORS["retract"]),
             ("pause", KIND_COLORS["pause"]),

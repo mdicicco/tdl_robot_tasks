@@ -64,6 +64,37 @@ class IoLedRow(QWidget):
             )
 
 
+class GripperRow(QWidget):
+    def __init__(self, name: str, description: str = ""):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        self.led = QLabel()
+        self.led.setFixedSize(14, 14)
+        self.label = QLabel(name)
+        self.label.setStyleSheet("font-weight: 600;")
+        self.status = QLabel("open")
+        self.status.setStyleSheet("color: #90A4AE;")
+        row.addWidget(self.led)
+        row.addWidget(self.label, stretch=1)
+        row.addWidget(self.status)
+        if description:
+            self.setToolTip(description)
+        self.set_closed(False)
+
+    def set_closed(self, closed: bool) -> None:
+        if closed:
+            self.led.setStyleSheet(
+                "background-color: #FFB74D; border-radius: 7px; border: 1px solid #FFCC80;"
+            )
+            self.status.setText("closed")
+        else:
+            self.led.setStyleSheet(
+                "background-color: #5D4037; border-radius: 7px; border: 1px solid #8D6E63;"
+            )
+            self.status.setText("open")
+
+
 class TowerLightStack(QWidget):
     def __init__(self, name: str, light: TowerLight):
         super().__init__()
@@ -137,6 +168,8 @@ class Viewer(QMainWindow):
         self._elapsed = QElapsedTimer()
         self.io_panel: QGroupBox | None = None
         self.io_leds: dict[str, IoLedRow] = {}
+        self.gripper_panel: QGroupBox | None = None
+        self.gripper_rows: dict[str, GripperRow] = {}
         self.tower_panel: QGroupBox | None = None
         self.tower_widgets: dict[str, TowerLightStack] = {}
         self._closing = False
@@ -253,6 +286,12 @@ class Viewer(QMainWindow):
         self.io_layout.setSpacing(2)
         v.addWidget(self.io_panel)
 
+        self.gripper_panel = QGroupBox("Grippers")
+        self.gripper_layout = QVBoxLayout(self.gripper_panel)
+        self.gripper_layout.setContentsMargins(8, 8, 8, 8)
+        self.gripper_layout.setSpacing(2)
+        v.addWidget(self.gripper_panel)
+
         self.tower_panel = QGroupBox("Tower lights")
         self.tower_layout = QVBoxLayout(self.tower_panel)
         self.tower_layout.setContentsMargins(8, 8, 8, 8)
@@ -336,6 +375,7 @@ class Viewer(QMainWindow):
             self.tcps[name] = TcpActor(self.plotter, name=label, ball_color=color)
         self._fill_sequence()
         self._rebuild_io_panel()
+        self._rebuild_gripper_panel()
         self._rebuild_tower_panel()
         if reset_camera and self.follow.isChecked():
             self.plotter.view_isometric()
@@ -375,6 +415,24 @@ class Viewer(QMainWindow):
             self.io_layout.addWidget(row)
             self.io_leds[name] = row
         self.io_layout.addStretch(1)
+
+    def _rebuild_gripper_panel(self) -> None:
+        assert self.gripper_panel is not None
+        while self.gripper_layout.count():
+            item = self.gripper_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.gripper_rows.clear()
+        if self.task is None or not self.task.grippers:
+            self.gripper_panel.hide()
+            return
+        self.gripper_panel.show()
+        for name in sorted(self.task.grippers):
+            spec = self.task.grippers[name]
+            row = GripperRow(name, spec.description)
+            self.gripper_layout.addWidget(row)
+            self.gripper_rows[name] = row
+        self.gripper_layout.addStretch(1)
 
     def _rebuild_tower_panel(self) -> None:
         assert self.tower_panel is not None
@@ -470,6 +528,10 @@ class Viewer(QMainWindow):
             io_state = self.multi_traj.io_timeline.state_at(t)
             for name, row in self.io_leds.items():
                 row.set_on(io_state.get(name, False))
+        if self.multi_traj.gripper_timeline is not None:
+            grip_state = self.multi_traj.gripper_timeline.state_at(t)
+            for name, row in self.gripper_rows.items():
+                row.set_closed(grip_state.get(name, False))
         if self.multi_traj.tower_timeline is not None:
             tower_state = self.multi_traj.tower_timeline.state_at(t)
             for name, widget in self.tower_widgets.items():

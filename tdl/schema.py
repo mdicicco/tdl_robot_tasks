@@ -43,6 +43,15 @@ class Robot(BaseModel):
     rest: RestPose = Field(default_factory=RestPose)
 
 
+class ToolRef(BaseModel):
+    """Which end-effector this operation's frames belong to on a multi-tool robot.
+
+    The viewer ignores this; it is stored so a later robot binding can select the TCP.
+    """
+
+    name: str = "tool1"
+
+
 class SearchArea(BaseModel):
     shape: Literal["box", "sphere", "cylinder"] = "box"
     extents: tuple[float, float, float] | None = None
@@ -205,6 +214,20 @@ class IoCommand(BaseModel):
         return False
 
 
+class GripperSpec(BaseModel):
+    """Carried gripper state (not external I/O)."""
+
+    description: str = ""
+    initial: Literal["open", "closed"] = "open"
+
+
+class GripperCommand(BaseModel):
+    """Open or close a named gripper."""
+
+    name: str | None = None
+    set: Literal["open", "closed"]
+
+
 class TowerLightState(BaseModel):
     """Named color slot on a tower light stack."""
 
@@ -235,6 +258,7 @@ class TowerLight(BaseModel):
 
 class Location(BaseModel):
     description: str = ""
+    tool: ToolRef = Field(default_factory=ToolRef)
     target: Frame
     search: SearchArea = Field(default_factory=SearchArea)
     # Single-stroke aliases. Prefer `pre` / `post` when there are several.
@@ -348,6 +372,7 @@ class PushSpec(BaseModel):
 
 class ForcePush(BaseModel):
     description: str = ""
+    tool: ToolRef = Field(default_factory=ToolRef)
     target: Frame
     approach: ApproachSpec | None = None
     push: PushSpec
@@ -375,6 +400,40 @@ class ForcePush(BaseModel):
         return self.push_end_pose(degrees) @ G.translate(self.retract.offset(degrees))
 
 
+class GrindPath(BaseModel):
+    """Approach a start pose, follow Cartesian waypoints, then retract.
+
+    `points` are XYZ offsets in the target frame (same orientation throughout).
+    """
+
+    description: str = ""
+    tool: ToolRef = Field(default_factory=ToolRef)
+    target: Frame
+    approach: ApproachSpec | None = None
+    retract: ApproachSpec = Field(default_factory=ApproachSpec)
+    points: list[tuple[float, float, float]] = Field(min_length=1)
+    sequence: list[Any] | None = None
+
+    def start_pose(self, degrees: bool) -> np.ndarray:
+        return self.path_poses(degrees)[0]
+
+    def path_poses(self, degrees: bool) -> list[np.ndarray]:
+        T = self.target.matrix(degrees)
+        return [T @ G.translate(p) for p in self.points]
+
+    def approach_pose(self, degrees: bool) -> np.ndarray:
+        start = self.start_pose(degrees)
+        if self.approach is None:
+            return start
+        return start @ G.translate(self.approach.offset(degrees))
+
+    def last_pose(self, degrees: bool) -> np.ndarray:
+        return self.path_poses(degrees)[-1]
+
+    def retract_pose(self, degrees: bool) -> np.ndarray:
+        return self.last_pose(degrees) @ G.translate(self.retract.offset(degrees))
+
+
 class Sensor(BaseModel):
     """Presence region tied to a gate. Reads true while that gate is held."""
 
@@ -398,6 +457,7 @@ class Gate(BaseModel):
     """Wait pose released when the named sensor reads true."""
 
     description: str = ""
+    tool: ToolRef = Field(default_factory=ToolRef)
     pose: Frame
     until: str
 
@@ -413,6 +473,7 @@ class SystemSpec(BaseModel):
     locations: dict[str, Location] = Field(default_factory=dict)
     keyholes: dict[str, Keyhole] = Field(default_factory=dict)
     force_pushes: dict[str, ForcePush] = Field(default_factory=dict)
+    grind_paths: dict[str, GrindPath] = Field(default_factory=dict)
     sequence: list[Any] = Field(default_factory=list)
 
 
@@ -423,6 +484,7 @@ class Keyhole(Frame):
     """
 
     description: str = ""
+    tool: ToolRef = Field(default_factory=ToolRef)
     radius: float = Field(default=0.05, gt=0.0)
 
 
@@ -459,8 +521,13 @@ class Step(BaseModel):
         "fp_start",
         "fp_push",
         "fp_retract",
+        "gp_approach",
+        "gp_start",
+        "gp_path",
+        "gp_retract",
         "gate",
         "io",
+        "gripper",
     ]
     ref: str | None = None
     index: int = 0
@@ -468,6 +535,7 @@ class Step(BaseModel):
     hold: float = 0.0
     gate_ref: str | None = None
     io_command: IoCommand | None = None
+    gripper_command: GripperCommand | None = None
     tower_task: str | None = None
 
 
@@ -481,8 +549,10 @@ class Task(BaseModel):
     limits: Limits = Field(default_factory=Limits)
     locations: dict[str, Location] = Field(default_factory=dict)
     io: dict[str, IoSignal] = Field(default_factory=dict)
+    grippers: dict[str, GripperSpec] = Field(default_factory=dict)
     tower_lights: dict[str, TowerLight] = Field(default_factory=dict)
     force_pushes: dict[str, ForcePush] = Field(default_factory=dict)
+    grind_paths: dict[str, GrindPath] = Field(default_factory=dict)
     keyholes: dict[str, Keyhole] = Field(default_factory=dict)
     sensors: dict[str, Sensor] = Field(default_factory=dict)
     gates: dict[str, Gate] = Field(default_factory=dict)
@@ -499,8 +569,10 @@ class Task(BaseModel):
         pools = {
             "location": set(self.locations),
             "io": set(self.io),
+            "gripper": set(self.grippers),
             "tower_light": set(self.tower_lights),
             "force_push": set(self.force_pushes),
+            "grind_path": set(self.grind_paths),
             "keyhole": set(self.keyholes),
             "sensor": set(self.sensors),
             "gate": set(self.gates),
@@ -530,9 +602,34 @@ class Task(BaseModel):
                 for cmd in _io_commands_in_sequence(fp.sequence):
                     if cmd.signal not in self.io:
                         raise ValueError(f"Unknown io signal {cmd.signal!r}")
-        known_tasks = set(self.locations) | set(self.force_pushes)
+        for gp in list(self.grind_paths.values()) + [
+            gp for spec in self.systems.values() for gp in spec.grind_paths.values()
+        ]:
+            if gp.sequence:
+                for cmd in _io_commands_in_sequence(gp.sequence):
+                    if cmd.signal not in self.io:
+                        raise ValueError(f"Unknown io signal {cmd.signal!r}")
+        for loc in list(self.locations.values()) + [
+            loc for spec in self.systems.values() for loc in spec.locations.values()
+        ]:
+            if loc.sequence:
+                for cmd in _gripper_commands_in_sequence(loc.sequence):
+                    _check_gripper_command(self, cmd)
+        for fp in list(self.force_pushes.values()) + [
+            fp for spec in self.systems.values() for fp in spec.force_pushes.values()
+        ]:
+            if fp.sequence:
+                for cmd in _gripper_commands_in_sequence(fp.sequence):
+                    _check_gripper_command(self, cmd)
+        for gp in list(self.grind_paths.values()) + [
+            gp for spec in self.systems.values() for gp in spec.grind_paths.values()
+        ]:
+            if gp.sequence:
+                for cmd in _gripper_commands_in_sequence(gp.sequence):
+                    _check_gripper_command(self, cmd)
+        known_tasks = set(self.locations) | set(self.force_pushes) | set(self.grind_paths)
         for spec in self.systems.values():
-            known_tasks |= set(spec.locations) | set(spec.force_pushes)
+            known_tasks |= set(spec.locations) | set(spec.force_pushes) | set(spec.grind_paths)
         for light in self.tower_lights.values():
             for task in light.tasks:
                 if task not in known_tasks:
@@ -550,3 +647,40 @@ def _io_commands_in_sequence(items: list[Any]) -> list[IoCommand]:
             else:
                 raise ValueError("io step must be a mapping with signal and set or pulse")
     return out
+
+
+def _parse_gripper_command(raw: Any) -> GripperCommand:
+    if isinstance(raw, str):
+        token = raw.strip().lower()
+        if token in {"open"}:
+            return GripperCommand(set="open")
+        if token in {"close", "closed"}:
+            return GripperCommand(set="closed")
+        raise ValueError("gripper shorthand must be open or close")
+    if isinstance(raw, dict):
+        data = dict(raw)
+        if "set" in data and isinstance(data["set"], str):
+            token = data["set"].strip().lower()
+            if token == "close":
+                data["set"] = "closed"
+        return GripperCommand.model_validate(data)
+    raise ValueError("gripper step must be open/close or a mapping with set")
+
+
+def _gripper_commands_in_sequence(items: list[Any]) -> list[GripperCommand]:
+    out: list[GripperCommand] = []
+    for raw in items:
+        if isinstance(raw, dict) and "gripper" in raw:
+            out.append(_parse_gripper_command(raw["gripper"]))
+    return out
+
+
+def _check_gripper_command(task: Task, cmd: GripperCommand) -> None:
+    if not task.grippers:
+        raise ValueError("gripper command used but no grippers are defined")
+    if cmd.name is None:
+        if len(task.grippers) != 1:
+            raise ValueError("gripper command needs name when more than one gripper is defined")
+        return
+    if cmd.name not in task.grippers:
+        raise ValueError(f"Unknown gripper {cmd.name!r}")

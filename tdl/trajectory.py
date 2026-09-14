@@ -8,9 +8,10 @@ import numpy as np
 
 from tdl import geometry as G
 from tdl.context import SystemContext
-from tdl.schema import IoCommand, Limits, Task
+from tdl.schema import GripperCommand, IoCommand, Limits, Task
 from tdl.sequence import Step, expand_sequence
 from tdl.signals import IoEvent, events_from_commands
+from tdl.gripper import GripperEvent, events_from_commands as gripper_events_from_commands
 
 
 @dataclass
@@ -22,6 +23,7 @@ class Knot:
     linear: bool = False
     gate_ref: str | None = None
     io_commands: list[IoCommand] = field(default_factory=list)
+    gripper_commands: list[GripperCommand] = field(default_factory=list)
     tower_task: str | None = None
 
 
@@ -44,6 +46,7 @@ class Trajectory:
     duration: float
     knots: list[Knot] = field(default_factory=list)
     io_events: list[IoEvent] = field(default_factory=list)
+    gripper_events: list[GripperEvent] = field(default_factory=list)
 
     def at_time(self, time: float) -> tuple[np.ndarray, str, str]:
         if len(self.t) == 0:
@@ -119,6 +122,19 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
             label = f"{prefix}{step.ref}:io:{cmd.signal}" if step.ref else f"{prefix}io:{cmd.signal}"
             knots.append(Knot(prev.pose.copy(), "io", label, io_commands=[cmd], tower_task=tt(step)))
             continue
+        if step.kind == "gripper":
+            if not knots:
+                raise ValueError("gripper cannot be the first sequence item")
+            if step.gripper_command is None:
+                raise ValueError("gripper step missing command")
+            prev = knots[-1]
+            cmd = step.gripper_command
+            gname = cmd.name or "gripper"
+            label = f"{prefix}{step.ref}:gripper:{gname}" if step.ref else f"{prefix}gripper:{gname}"
+            knots.append(
+                Knot(prev.pose.copy(), "gripper", label, gripper_commands=[cmd], tower_task=tt(step))
+            )
+            continue
         if step.kind.startswith("fp_"):
             fp = ctx.force_pushes[step.ref]
             approach = fp.approach_pose(task.degrees)
@@ -136,6 +152,31 @@ def knots_from_context(ctx: SystemContext, task: Task) -> list[Knot]:
                 knots.append(Knot(push_end, "fp_push", f"{prefix}push:{step.ref}", linear=True, tower_task=task_tag))
             elif step.kind == "fp_retract":
                 knots.append(Knot(retract, "fp_retract", f"{prefix}retract:{step.ref}", linear=True, tower_task=task_tag))
+            continue
+        if step.kind.startswith("gp_"):
+            gp = ctx.grind_paths[step.ref]
+            poses = gp.path_poses(task.degrees)
+            task_tag = tt(step)
+            if step.kind == "gp_approach":
+                knots.append(Knot(gp.approach_pose(task.degrees), "gp_approach", f"{prefix}approach:{step.ref}", tower_task=task_tag))
+            elif step.kind == "gp_start":
+                knots.append(
+                    Knot(
+                        poses[0],
+                        "gp_start",
+                        f"{prefix}start:{step.ref}",
+                        linear=gp.approach is not None,
+                        tower_task=task_tag,
+                    )
+                )
+            elif step.kind == "gp_path":
+                if step.index >= len(poses):
+                    raise IndexError(f"path index {step.index} out of range for {step.ref!r}")
+                knots.append(
+                    Knot(poses[step.index], "gp_path", f"{prefix}path:{step.ref}[{step.index}]", linear=True, tower_task=task_tag)
+                )
+            elif step.kind == "gp_retract":
+                knots.append(Knot(gp.retract_pose(task.degrees), "gp_retract", f"{prefix}retract:{step.ref}", linear=True, tower_task=task_tag))
             continue
         loc = ctx.locations[step.ref]
         pre, tgt, post = loc.cartesian_poses(task.degrees, visit=step.visit)
@@ -191,7 +232,7 @@ def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
     out = [knots[0]]
     for k in knots[1:]:
         lin, ang = G.geodesic_metrics(out[-1].pose, k.pose)
-        if k.kind == "pause" or k.kind == "gate" or k.kind == "io" or out[-1].kind in {"pause", "gate", "io"}:
+        if k.kind == "pause" or k.kind == "gate" or k.kind == "io" or k.kind == "gripper" or out[-1].kind in {"pause", "gate", "io", "gripper"}:
             out.append(k)
             continue
         if lin < 1e-9 and ang < 1e-9:
@@ -200,6 +241,7 @@ def _dedupe_adjacent(knots: list[Knot]) -> list[Knot]:
             out[-1].kind = k.kind
             out[-1].linear = k.linear
             out[-1].io_commands = list(out[-1].io_commands) + list(k.io_commands)
+            out[-1].gripper_commands = list(out[-1].gripper_commands) + list(k.gripper_commands)
             out[-1].tower_task = k.tower_task
         else:
             out.append(k)
@@ -233,6 +275,7 @@ def time_parameterize(
     labels: list[str] = []
     segments: list[Segment] = []
     io_events: list[IoEvent] = []
+    gripper_events: list[GripperEvent] = []
 
     t = 0.0
     times.append(t)
@@ -242,6 +285,9 @@ def time_parameterize(
 
     def emit_io(commands: list[IoCommand], at: float) -> None:
         io_events.extend(events_from_commands(commands, at))
+
+    def emit_gripper(commands: list[GripperCommand], at: float) -> None:
+        gripper_events.extend(gripper_events_from_commands(commands, at))
 
     def sample_hold(pose: np.ndarray, kind: str, label: str, hold: float) -> None:
         nonlocal t
@@ -258,6 +304,7 @@ def time_parameterize(
         t = t_end
 
     emit_io(knots[0].io_commands, t)
+    emit_gripper(knots[0].gripper_commands, t)
     sample_hold(knots[0].pose, knots[0].kind, knots[0].label, knots[0].dwell)
 
     def sample_linear(a: Knot, b: Knot) -> None:
@@ -275,6 +322,7 @@ def time_parameterize(
         t = t0 + duration
         segments.append(Segment(t0, t, b.kind, b.label, tower_task=_segment_tower_task(a, b)))
         emit_io(b.io_commands, t)
+        emit_gripper(b.gripper_commands, t)
         sample_hold(b.pose, b.kind, b.label, b.dwell)
 
     def sample_spline(chain: list[Knot]) -> None:
@@ -297,6 +345,7 @@ def time_parameterize(
             a = chain[i - 1]
             knot_t = t0 + duration * float(knot_frac[i - 1])
             emit_io(b.io_commands, knot_t)
+            emit_gripper(b.gripper_commands, knot_t)
             segments.append(
                 Segment(
                     knot_t,
@@ -316,6 +365,12 @@ def time_parameterize(
             segments.append(Segment(t, t, "io", k.label, tower_task=k.tower_task))
             i += 1
             continue
+        if knots[i + 1].kind == "gripper":
+            k = knots[i + 1]
+            emit_gripper(k.gripper_commands, t)
+            segments.append(Segment(t, t, "gripper", k.label, tower_task=k.tower_task))
+            i += 1
+            continue
         if knots[i + 1].kind == "pause":
             t0 = t
             k = knots[i + 1]
@@ -333,7 +388,7 @@ def time_parameterize(
             j < len(knots) - 1
             and not knots[j + 1].linear
             and knots[j].dwell <= 0
-            and knots[j + 1].kind not in {"pause", "io"}
+            and knots[j + 1].kind not in {"pause", "io", "gripper"}
         ):
             j += 1
         sample_spline(knots[i : j + 1])
@@ -348,6 +403,7 @@ def time_parameterize(
         duration=float(times[-1]),
         knots=knots,
         io_events=io_events,
+        gripper_events=gripper_events,
     )
 
 

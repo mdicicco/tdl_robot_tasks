@@ -16,6 +16,9 @@ pip install -e .
 ## Run the viewer
 
 ```bash
+tdl-viewer examples/simple_pick_place.yaml
+tdl-viewer examples/grab_stamp_grind_drop.yaml
+tdl-viewer examples/whiteboard_draw_erase.yaml
 tdl-viewer examples/pick_and_place.yaml
 tdl-viewer examples/gated_dual_pick_place.yaml
 ```

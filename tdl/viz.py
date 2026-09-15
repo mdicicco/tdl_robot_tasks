@@ -43,6 +43,53 @@ KIND_COLORS = {
     "idle": "#BDBDBD",
 }
 
+# Friendly legend labels; only kinds present in the trajectory are shown.
+_LEGEND_LABELS = {
+    "rest": "rest",
+    "transit": "transit",
+    "keyhole": "keyhole",
+    "approach": "approach",
+    "pre": "approach",
+    "target": "target",
+    "post": "retract",
+    "retract": "retract",
+    "pause": "pause",
+    "io": "io",
+    "gripper": "gripper",
+    "fp_approach": "approach",
+    "fp_start": "force start",
+    "fp_push": "force push",
+    "fp_retract": "retract",
+    "gp_approach": "approach",
+    "gp_start": "path start",
+    "gp_path": "grind path",
+    "gp_retract": "retract",
+    "gate": "gate",
+}
+
+_LEGEND_ORDER = [
+    "rest",
+    "transit",
+    "keyhole",
+    "approach",
+    "pre",
+    "fp_approach",
+    "gp_approach",
+    "target",
+    "fp_start",
+    "fp_push",
+    "gp_start",
+    "gp_path",
+    "gate",
+    "io",
+    "gripper",
+    "pause",
+    "post",
+    "retract",
+    "fp_retract",
+    "gp_retract",
+]
+
 AXIS_COLORS = ("#E53935", "#43A047", "#1E88E5")
 
 
@@ -349,6 +396,28 @@ def add_path(plotter: pv.Plotter, traj: Trajectory, path_id: str = "") -> None:
         )
 
 
+def _legend_entries(traj: Trajectory | MultiTrajectory) -> list[tuple[str, str]]:
+    """Build legend rows from segment kinds actually used in this trajectory."""
+    kinds: set[str] = set()
+    if MultiTrajectory is not None and isinstance(traj, MultiTrajectory):
+        for sys_traj in traj.systems.values():
+            kinds.update(seg.kind for seg in sys_traj.segments)
+    else:
+        kinds.update(seg.kind for seg in traj.segments)  # type: ignore[union-attr]
+
+    entries: list[tuple[str, str]] = []
+    seen_labels: set[str] = set()
+    for kind in _LEGEND_ORDER:
+        if kind not in kinds:
+            continue
+        label = _LEGEND_LABELS.get(kind, kind)
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        entries.append((label, KIND_COLORS.get(kind, "#FFFFFF")))
+    return entries
+
+
 def add_static_scene(plotter: pv.Plotter, task: Task, traj: Trajectory | MultiTrajectory) -> None:
     add_world(plotter)
     add_rest(plotter, task)
@@ -380,23 +449,14 @@ def add_static_scene(plotter: pv.Plotter, task: Task, traj: Trajectory | MultiTr
             add_path(plotter, sys_traj, path_id=sys_name or "main")
     else:
         add_path(plotter, traj)  # type: ignore[arg-type]
-    plotter.add_legend(
-        [
-            ("transit", KIND_COLORS["transit"]),
-            ("keyhole", KIND_COLORS["keyhole"]),
-            ("approach", KIND_COLORS["approach"]),
-            ("target", KIND_COLORS["target"]),
-            ("force push", KIND_COLORS["fp_push"]),
-            ("grind", KIND_COLORS["gp_path"]),
-            ("gate", KIND_COLORS["gate"]),
-            ("retract", KIND_COLORS["retract"]),
-            ("pause", KIND_COLORS["pause"]),
-            ("rest", KIND_COLORS["rest"]),
-        ],
-        bcolor="#1B1E24",
-        face="rectangle",
-        loc="upper right",
-    )
+    legend = _legend_entries(traj)
+    if legend:
+        plotter.add_legend(
+            legend,
+            bcolor="#1B1E24",
+            face="rectangle",
+            loc="upper right",
+        )
 
 
 class TcpActor:

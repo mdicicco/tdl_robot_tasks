@@ -1,0 +1,90 @@
+# Minimal pick-and-place: rest → pickup → dropoff → rest
+# Pickup at +Y, dropoff at -Y. Gripper closes on pick and opens on place.
+
+version: 1
+name: simple_pick_place
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.42]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.30
+  angular: 90.0
+  approach_linear: 0.08
+
+grippers:
+  gripper:
+    description: Part gripper
+    initial: open
+
+tower_lights:
+  cell:
+    description: Pick / place status
+    states:
+      - { name: pick, color: "#29B6F6" }
+      - { name: place, color: "#66BB6A" }
+    tasks:
+      pickup: 0
+      dropoff: 1
+
+locations:
+  pickup:
+    description: Pick from the tray
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, 0.30, 0.04]
+      rpy: [180.0, 0.0, 0.0]
+    search:
+      shape: box
+      extents: [0.08, 0.06, 0.03]
+    approach:
+      elevation: -90.0
+      distance: 0.12
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    dwell: 0.30
+    sequence:
+      - approach
+      - target
+      - gripper: close
+      - retract
+
+  dropoff:
+    description: Place into the bin
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, -0.30, 0.04]
+      rpy: [180.0, 0.0, 0.0]
+    search:
+      shape: cylinder
+      radius: 0.05
+      height: 0.04
+    approach:
+      elevation: -90.0
+      distance: 0.14
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    dwell: 0.25
+    sequence:
+      - approach
+      - target
+      - gripper: open
+      - retract
+
+sequence:
+  - rest
+  - pickup
+  - dropoff
+  - rest

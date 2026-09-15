@@ -1,0 +1,170 @@
+# Grab → stamp → grind → drop
+#   grab   pick part from tray (+Y)
+#   stamp  insert / dwell at machine (+X)
+#   grind  figure-8 sanding path (~SE)
+#   drop   place into bin (-Y)
+
+version: 1
+name: grab_stamp_grind_drop
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.42]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.28
+  angular: 90.0
+  approach_linear: 0.08
+
+io:
+  stamp_cycle:
+    description: Stamp press cycle start
+    initial: false
+
+grippers:
+  gripper:
+    description: Part gripper
+    initial: open
+
+tower_lights:
+  cell:
+    description: Cell status stack light
+    states:
+      - { name: grab, color: "#29B6F6" }
+      - { name: stamp, color: "#FFA726" }
+      - { name: grind, color: "#BA68C8" }
+      - { name: drop, color: "#66BB6A" }
+    tasks:
+      grab: 0
+      stamp: 1
+      grind: 2
+      drop: 3
+
+locations:
+  grab:
+    description: Pick part from tray
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, 0.32, 0.04]
+      rpy: [180.0, 0.0, 0.0]
+    search:
+      shape: box
+      extents: [0.08, 0.06, 0.03]
+    approach:
+      elevation: -90.0
+      distance: 0.12
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    dwell: 0.30
+    sequence:
+      - approach
+      - target
+      - gripper: close
+      - retract
+
+  stamp:
+    description: Stamp / insert at the machine
+    tool:
+      name: tool1
+    target:
+      xyz: [0.32, 0.00, 0.12]
+      rpy: [90.0, 0.0, 90.0]   # tool Z toward +X
+    search:
+      shape: box
+      extents: [0.04, 0.03, 0.04]
+    approach:
+      elevation: -90.0
+      distance: 0.14
+    post:
+      - axis: [0.0, 1.0, 0.0]
+        distance: 0.03
+      - axis: [0.0, 0.0, -1.0]
+        distance: 0.12
+    dwell: 0.35
+    sequence:
+      - approach
+      - target
+      - io:
+          signal: stamp_cycle
+          pulse: 0.4
+      - pause: 0.8
+      - post: 0
+      - post: 1
+
+  drop:
+    description: Place finished part into bin
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, -0.32, 0.04]
+      rpy: [180.0, 0.0, 0.0]
+    search:
+      shape: cylinder
+      radius: 0.05
+      height: 0.04
+    approach:
+      elevation: -90.0
+      distance: 0.14
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    dwell: 0.25
+    sequence:
+      - approach
+      - target
+      - gripper: open
+      - retract
+
+grind_paths:
+  grind:
+    description: Figure-8 sanding after stamp
+    tool:
+      name: tool1
+    target:
+      xyz: [0.22, -0.22, 0.05]
+      rpy: [180.0, 0.0, 0.0]
+    approach:
+      elevation: -90.0
+      distance: 0.10
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.10
+    # 20 points of a figure-8 in the target XY plane
+    points:
+      - [ 0.0000,  0.0000, 0.0000]
+      - [ 0.0155,  0.0147, 0.0000]
+      - [ 0.0294,  0.0238, 0.0000]
+      - [ 0.0405,  0.0238, 0.0000]
+      - [ 0.0476,  0.0147, 0.0000]
+      - [ 0.0500,  0.0000, 0.0000]
+      - [ 0.0476, -0.0147, 0.0000]
+      - [ 0.0405, -0.0238, 0.0000]
+      - [ 0.0294, -0.0238, 0.0000]
+      - [ 0.0155, -0.0147, 0.0000]
+      - [ 0.0000,  0.0000, 0.0000]
+      - [-0.0155,  0.0147, 0.0000]
+      - [-0.0294,  0.0238, 0.0000]
+      - [-0.0405,  0.0238, 0.0000]
+      - [-0.0476,  0.0147, 0.0000]
+      - [-0.0500,  0.0000, 0.0000]
+      - [-0.0476, -0.0147, 0.0000]
+      - [-0.0405, -0.0238, 0.0000]
+      - [-0.0294, -0.0238, 0.0000]
+      - [-0.0155, -0.0147, 0.0000]
+
+sequence:
+  - rest
+  - grab
+  - stamp
+  - grind
+  - drop
+  - rest

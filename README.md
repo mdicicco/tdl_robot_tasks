@@ -19,6 +19,8 @@ pip install -e .
 tdl-viewer examples/simple_pick_place.yaml
 tdl-viewer examples/grab_stamp_grind_drop.yaml
 tdl-viewer examples/whiteboard_draw_erase.yaml
+tdl-viewer examples/whiteboard_count.yaml          # nested digits 0–9 + erase
+tdl-viewer examples/pick_include_place.yaml        # nested station sub-task
 tdl-viewer examples/pick_and_place.yaml
 tdl-viewer examples/gated_dual_pick_place.yaml
 ```
@@ -44,7 +46,7 @@ Top-level document (`version: 1`):
 | `systems` | Parallel lines, each with its own locations, limits, and sequence |
 | `keyholes` | Named via poses; free-space goto between locations passes through them |
 | `free_space` | Named via-point paths (optional; keyholes usually replace these) |
-| `sequence` | Ordered steps, including `repeat` blocks |
+| `sequence` | Ordered steps, including `repeat` blocks and nested `include`s |
 | `limits` | Default linear / angular / approach speeds |
 
 Each **location** has:
@@ -103,6 +105,44 @@ Sequence steps:
 - `{approach: <location>}` / `{target: <location>}` / `{retract: <location>}`
 - `{pause: <seconds>}` — hold the previous pose (no extra frame)
 - `{repeat: {times: N, steps: [...]}}`
+- `{include: {file, as, offset?, strip_rest?}}` — nest another full task file (see below)
+
+### Nesting task files (`include`)
+
+A sequence step can pull in another YAML/JSON task file. At load time the child is flattened into the parent: catalogs are merged, poses are shifted by an SE(3) `offset`, and the child’s sequence is spliced in place. Free-space motion then runs from the previous parent retract into the child’s first approach, and from the child’s last retract to the next parent destination.
+
+```yaml
+sequence:
+  - rest
+  - pickup
+  - include:
+      file: ./station_stamp_grind.yaml
+      as: station                 # prefixes child names: station/stamp, station/grind
+      offset:                     # child world → parent world
+        xyz: [0.35, 0.0, 0.0]
+        rpy: [0.0, 0.0, 0.0]
+      strip_rest: true            # default; drop leading/trailing rest from the child
+  - dropoff
+  - rest
+```
+
+Rules:
+
+- **`file`** — path relative to the including file
+- **`as`** — required namespace prefix for locations, grind paths, force pushes, keyholes, free-space paths, sensors, and gates
+- **`offset`** — optional frame applied as \(T_{\text{parent}} = T_{\text{offset}} @ T_{\text{child}}\) to every world pose in the child (location/FP/grind targets, keyholes, gates, sensor centers). Approach distances, grind `points`, and target-frame patterns stay in the child frame
+- **`strip_rest`** — default `true`; removes outer `rest` steps so the subtask does not snap to rest mid-parent
+- **Parent owns** `robot`, `units` (must match), and `limits`
+- **`io` / `grippers`** merge by name (identical defs ok; conflict errors)
+- **Tower lights** with a new name are added; if the parent already defines the same light name, the parent stack wins — map prefixed tasks (e.g. `station/stamp`) on the parent
+- Included files may not define `systems` (nesting into a system sequence is allowed; motion names land in that system)
+- Circular includes are rejected
+
+Examples:
+
+- `examples/pick_include_place.yaml` — pick → nested stamp/grind station → place (`examples/station_stamp_grind.yaml`)
+- `examples/whiteboard_count.yaml` — draws digits 0–9 with an erase between each; strokes live in `examples/digits/`
+- `examples/whiteboard_draw_erase.yaml` — earlier single-file draw-“3”-then-erase demo (unchanged)
 
 Geometry uses 4×4 homogeneous transforms (`scipy.spatial.transform` for orientation). Free-space / transit motion (including into the first approach pose) follows a cubic spline through waypoints; every Cartesian stroke at a location (into the target and each post-target move) stays straight-line. Orientation is SLERP, time-scaled by the active velocity limits.
 

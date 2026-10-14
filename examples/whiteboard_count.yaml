@@ -1,0 +1,142 @@
+# High-level whiteboard loop using nested digit sub-tasks.
+# For each digit 0–9: draw that glyph (tool1), then erase (tool2).
+# Digit strokes live in examples/digits/draw_N.yaml; erase in examples/digits/erase.yaml.
+#
+#   tdl-viewer examples/whiteboard_count.yaml
+#
+# Each include uses a unique `as:` prefix so names do not collide when the same
+# erase file is nested multiple times. strip_rest (default) drops each child's
+# outer rest so free-space connects draw → erase → next draw.
+
+version: 1
+name: whiteboard_count
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.35]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.25
+  angular: 90.0
+  approach_linear: 0.06
+
+tower_lights:
+  cell:
+    description: Draw vs erase
+    states:
+      - { name: draw, color: "#29B6F6" }
+      - { name: erase, color: "#FFCC80" }
+    tasks:
+      n0/draw: 0
+      e0/erase: 1
+      n1/draw: 0
+      e1/erase: 1
+      n2/draw: 0
+      e2/erase: 1
+      n3/draw: 0
+      e3/erase: 1
+      n4/draw: 0
+      e4/erase: 1
+      n5/draw: 0
+      e5/erase: 1
+      n6/draw: 0
+      e6/erase: 1
+      n7/draw: 0
+      e7/erase: 1
+      n8/draw: 0
+      e8/erase: 1
+      n9/draw: 0
+      e9/erase: 1
+
+sequence:
+  - rest
+  - include:
+      file: ./digits/draw_0.yaml
+      as: n0
+      offset: &board_offset
+        xyz: [0.00, 0.00, 0.00]
+        rpy: [0.0, 0.0, 0.0]
+  - include:
+      file: ./digits/erase.yaml
+      as: e0
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_1.yaml
+      as: n1
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e1
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_2.yaml
+      as: n2
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e2
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_3.yaml
+      as: n3
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e3
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_4.yaml
+      as: n4
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e4
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_5.yaml
+      as: n5
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e5
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_6.yaml
+      as: n6
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e6
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_7.yaml
+      as: n7
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e7
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_8.yaml
+      as: n8
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e8
+      offset: *board_offset
+  - include:
+      file: ./digits/draw_9.yaml
+      as: n9
+      offset: *board_offset
+  - include:
+      file: ./digits/erase.yaml
+      as: e9
+      offset: *board_offset
+  - rest

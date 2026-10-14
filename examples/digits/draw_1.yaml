@@ -1,0 +1,47 @@
+# Digit 1 draw stroke (local board frame at origin).
+# Included by examples/whiteboard_count.yaml
+
+version: 1
+name: draw_1
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.35]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.25
+  angular: 90.0
+  approach_linear: 0.06
+
+grind_paths:
+  draw:
+    description: Marker draws digit 1
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, 0.00, 0.05]
+      rpy: [180.0, 0.0, 0.0]
+    approach:
+      elevation: -90.0
+      distance: 0.12
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    points:
+      - [-0.0080,  0.0350, 0.0000]
+      - [ 0.0000,  0.0520, 0.0000]
+      - [ 0.0000, -0.0520, 0.0000]
+      - [-0.0120, -0.0520, 0.0000]
+      - [ 0.0120, -0.0520, 0.0000]
+
+sequence:
+  - rest
+  - draw
+  - rest

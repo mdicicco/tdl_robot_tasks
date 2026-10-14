@@ -35,6 +35,13 @@ def pose_xyz_rpy(xyz: Vec3, rpy: Vec3, degrees: bool) -> np.ndarray:
     return make_pose(xyz, rpy_to_matrix(rpy, degrees=degrees))
 
 
+def matrix_to_xyz_rpy(T: np.ndarray, degrees: bool) -> tuple[Vec3, Vec3]:
+    """Decompose a 4×4 pose into translation and xyz-intrinsic RPY."""
+    xyz = tuple(float(v) for v in T[:3, 3])
+    rpy = tuple(float(v) for v in Rotation.from_matrix(T[:3, :3]).as_euler("xyz", degrees=degrees))
+    return xyz, rpy  # type: ignore[return-value]
+
+
 def invert(T: np.ndarray) -> np.ndarray:
     R = T[:3, :3]
     t = T[:3, 3]

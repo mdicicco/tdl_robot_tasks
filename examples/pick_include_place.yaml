@@ -1,0 +1,105 @@
+# Generic pick / place shell that nests a full station process file.
+# Parent owns pickup + dropoff; the include places station_stamp_grind at +X
+# so free-space from pickup retract → station approach, then station retract → dropoff.
+#
+#   tdl-viewer examples/pick_include_place.yaml
+
+version: 1
+name: pick_include_place
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.42]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.28
+  angular: 90.0
+  approach_linear: 0.08
+
+grippers:
+  gripper:
+    description: Part gripper
+    initial: open
+
+tower_lights:
+  cell:
+    description: Pick → process → place
+    states:
+      - { name: pick, color: "#29B6F6" }
+      - { name: stamp, color: "#FFA726" }
+      - { name: grind, color: "#BA68C8" }
+      - { name: place, color: "#66BB6A" }
+    tasks:
+      pickup: 0
+      station/stamp: 1
+      station/grind: 2
+      dropoff: 3
+
+locations:
+  pickup:
+    description: Pick from the tray
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, 0.32, 0.04]
+      rpy: [180.0, 0.0, 0.0]
+    search:
+      shape: box
+      extents: [0.08, 0.06, 0.03]
+    approach:
+      elevation: -90.0
+      distance: 0.12
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    dwell: 0.30
+    sequence:
+      - approach
+      - target
+      - gripper: close
+      - retract
+
+  dropoff:
+    description: Place finished part into bin
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, -0.32, 0.04]
+      rpy: [180.0, 0.0, 0.0]
+    search:
+      shape: cylinder
+      radius: 0.05
+      height: 0.04
+    approach:
+      elevation: -90.0
+      distance: 0.14
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    dwell: 0.25
+    sequence:
+      - approach
+      - target
+      - gripper: open
+      - retract
+
+sequence:
+  - rest
+  - pickup
+  - include:
+      file: ./station_stamp_grind.yaml
+      as: station
+      # Child world → parent world. Station local origin lands at +X.
+      offset:
+        xyz: [0.35, 0.00, 0.00]
+        rpy: [0.0, 0.0, 0.0]
+      strip_rest: true   # default; drop child's leading/trailing rest
+  - dropoff
+  - rest

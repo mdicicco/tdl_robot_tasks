@@ -1,0 +1,110 @@
+# Standalone station process: stamp then grind.
+# Defined near the origin so a parent can place it with include.offset.
+# Run alone:  tdl-viewer examples/station_stamp_grind.yaml
+# Nested in:  examples/pick_include_place.yaml
+
+version: 1
+name: station_stamp_grind
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.42]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.28
+  angular: 90.0
+  approach_linear: 0.08
+
+io:
+  stamp_cycle:
+    description: Stamp press cycle start
+    initial: false
+
+tower_lights:
+  station:
+    description: Station status (used when this file is opened alone)
+    states:
+      - { name: stamp, color: "#FFA726" }
+      - { name: grind, color: "#BA68C8" }
+    tasks:
+      stamp: 0
+      grind: 1
+
+locations:
+  stamp:
+    description: Stamp / insert at the machine (local station frame)
+    tool:
+      name: tool1
+    target:
+      xyz: [0.00, 0.00, 0.12]
+      rpy: [90.0, 0.0, 90.0]   # tool Z toward +X
+    search:
+      shape: box
+      extents: [0.04, 0.03, 0.04]
+    approach:
+      elevation: -90.0
+      distance: 0.14
+    post:
+      - axis: [0.0, 1.0, 0.0]
+        distance: 0.03
+      - axis: [0.0, 0.0, -1.0]
+        distance: 0.12
+    dwell: 0.35
+    sequence:
+      - approach
+      - target
+      - io:
+          signal: stamp_cycle
+          pulse: 0.4
+      - pause: 0.8
+      - post: 0
+      - post: 1
+
+grind_paths:
+  grind:
+    description: Figure-8 sanding after stamp (local station frame)
+    tool:
+      name: tool1
+    target:
+      xyz: [-0.10, -0.18, 0.05]
+      rpy: [180.0, 0.0, 0.0]
+    approach:
+      elevation: -90.0
+      distance: 0.10
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.10
+    points:
+      - [ 0.0000,  0.0000, 0.0000]
+      - [ 0.0155,  0.0147, 0.0000]
+      - [ 0.0294,  0.0238, 0.0000]
+      - [ 0.0405,  0.0238, 0.0000]
+      - [ 0.0476,  0.0147, 0.0000]
+      - [ 0.0500,  0.0000, 0.0000]
+      - [ 0.0476, -0.0147, 0.0000]
+      - [ 0.0405, -0.0238, 0.0000]
+      - [ 0.0294, -0.0238, 0.0000]
+      - [ 0.0155, -0.0147, 0.0000]
+      - [ 0.0000,  0.0000, 0.0000]
+      - [-0.0155,  0.0147, 0.0000]
+      - [-0.0294,  0.0238, 0.0000]
+      - [-0.0405,  0.0238, 0.0000]
+      - [-0.0476,  0.0147, 0.0000]
+      - [-0.0500,  0.0000, 0.0000]
+      - [-0.0476, -0.0147, 0.0000]
+      - [-0.0405, -0.0238, 0.0000]
+      - [-0.0294, -0.0238, 0.0000]
+      - [-0.0155, -0.0147, 0.0000]
+
+sequence:
+  - rest
+  - stamp
+  - grind
+  - rest

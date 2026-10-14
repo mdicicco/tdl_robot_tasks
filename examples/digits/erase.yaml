@@ -1,0 +1,56 @@
+# Erase zig-zag over the digit bounding box (local board frame).
+# Included by examples/whiteboard_count.yaml between digit draws.
+
+version: 1
+name: erase_digit
+
+units:
+  length: m
+  angle: deg
+
+robot:
+  rest:
+    joints: [0.0, -70.0, 110.0, 0.0, 50.0, 0.0]
+    tool:
+      xyz: [0.00, 0.00, 0.35]
+      rpy: [180.0, 0.0, 0.0]
+
+limits:
+  linear: 0.25
+  angular: 90.0
+  approach_linear: 0.06
+
+grind_paths:
+  erase:
+    description: Eraser zig-zag over the glyph
+    tool:
+      name: tool2
+    target:
+      xyz: [0.00, 0.00, 0.05]
+      rpy: [180.0, 0.0, 0.0]
+    approach:
+      elevation: -90.0
+      distance: 0.12
+    retract:
+      axis: [0.0, 0.0, -1.0]
+      distance: 0.12
+    points:
+      - [-0.0350,  0.0550, 0.0000]
+      - [ 0.0350,  0.0550, 0.0000]
+      - [ 0.0350,  0.0350, 0.0000]
+      - [-0.0350,  0.0350, 0.0000]
+      - [-0.0350,  0.0150, 0.0000]
+      - [ 0.0350,  0.0150, 0.0000]
+      - [ 0.0350, -0.0050, 0.0000]
+      - [-0.0350, -0.0050, 0.0000]
+      - [-0.0350, -0.0250, 0.0000]
+      - [ 0.0350, -0.0250, 0.0000]
+      - [ 0.0350, -0.0450, 0.0000]
+      - [-0.0350, -0.0450, 0.0000]
+      - [-0.0350, -0.0550, 0.0000]
+      - [ 0.0350, -0.0550, 0.0000]
+
+sequence:
+  - rest
+  - erase
+  - rest
